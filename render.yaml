@@ -1,0 +1,35 @@
+# Render.com blueprint: New -> Blueprint -> select this repository.
+services:
+  - type: web
+    name: prime-ai-search
+    runtime: docker
+    plan: starter          # always on; the free plan sleeps after inactivity
+    region: frankfurt
+    healthCheckPath: /healthz
+    disk:
+      name: catalog
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false        # entered in the Render dashboard
+      - key: UPGATES_LOGIN
+        sync: false
+      - key: UPGATES_API_KEY
+        sync: false
+      - key: UPGATES_BASE_URL
+        value: https://prime-work.admin.s35.upgates.com/api/v2
+      - key: AI_MODEL
+        value: claude-haiku-5-5
+      - key: AI_EFFORT
+        value: low
+      - key: AI_RERANK
+        value: "1"
+      - key: AI_RATE_PER_MIN
+        value: "20"
+      - key: SYNC_INTERVAL_MIN
+        value: "60"
+      - key: ALLOWED_ORIGINS
+        value: https://www.primework.sk,https://primework.sk,https://www.munkaruhazatolcson.hu,https://munkaruhazatolcson.hu
+      - key: ADMIN_TOKEN
+        generateValue: true
