@@ -102,15 +102,36 @@ def normalize_product(p, lang, domain=""):
     }
 
 
+# Keys never used by the search; dropping them while parsing keeps memory low
+# (variant "metas" and the full price-list matrix are ~99 % of the API response).
+_DROP_KEYS = {"metas", "stocks", "groups", "related_products", "parameters_groups"}
+
+
+def _slim(pairs):
+    """json object_pairs_hook: drop unused fields and keep only the shop's default price list."""
+    obj = {}
+    for k, v in pairs:
+        if k in _DROP_KEYS:
+            continue
+        if k == "pricelists" and isinstance(v, list) and len(v) > 1:
+            v = [next((pl for pl in v if pl.get("name") == DEFAULT_PRICELIST), v[0])]
+        obj[k] = v
+    return obj
+
+
 def build_catalog(client=None):
+    """Stream products page by page so a 500 MB+ API response never sits in memory at once."""
     client = client or UpgatesClient()
     langs = client.get("languages")["languages"]
-    products = list(client.paginate("products"))
-    catalog = {"generated_at": int(time.time()), "languages": {}}
-    for lang in langs:
-        code = lang["language_id"]
-        docs = [x for x in (normalize_product(p, code, lang.get("domain", "")) for p in products) if x]
-        catalog["languages"][code] = {"domain": lang.get("domain"), "currency": lang.get("currency_id"), "products": docs}
+    catalog = {"generated_at": int(time.time()), "languages": {
+        l["language_id"]: {"domain": l.get("domain"), "currency": l.get("currency_id"), "products": []}
+        for l in langs
+    }}
+    for p in client.paginate("products", object_pairs_hook=_slim):
+        for code, lang in catalog["languages"].items():
+            doc = normalize_product(p, code, lang["domain"] or "")
+            if doc:
+                lang["products"].append(doc)
     return catalog
 
 

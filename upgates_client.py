@@ -40,24 +40,28 @@ class UpgatesClient:
             self.headers["Authorization"] = f"Basic {token}"
         self._opener = urllib.request.build_opener(_NoRedirect)
 
-    def get(self, endpoint, **params):
+    def get(self, endpoint, object_pairs_hook=None, **params):
+        """GET an endpoint. `object_pairs_hook` is passed to json.loads (e.g. to drop
+        unneeded fields while parsing large responses)."""
         url = f"{self.base_url}/{endpoint.lstrip('/')}"
         if params:
             url += "?" + urllib.parse.urlencode(params)
         req = urllib.request.Request(url, headers=self.headers)
         try:
             with self._opener.open(req, timeout=self.timeout) as resp:
-                return json.loads(resp.read().decode())
+                return json.loads(resp.read(), object_pairs_hook=object_pairs_hook)
         except urllib.error.HTTPError as e:
             raise UpgatesError(e.code, e.read().decode(errors="replace")[:500]) from None
 
-    def paginate(self, endpoint, key=None, max_pages=None, **params):
+    def paginate(self, endpoint, key=None, max_pages=None, object_pairs_hook=None, **params):
         """Yield items from all pages. Upgates paginates only via `page` (no `limit`)."""
         key = key or endpoint.split("/")[0]
         page = 1
         while True:
-            data = self.get(endpoint, page=page, **params)
-            yield from data.get(key, [])
+            data = self.get(endpoint, object_pairs_hook=object_pairs_hook, page=page, **params)
+            items = data.pop(key, [])
+            while items:  # hand items out one by one and let the page be freed as we go
+                yield items.pop(0)
             if page >= data.get("number_of_pages", 1) or (max_pages and page >= max_pages):
                 break
             page += 1
