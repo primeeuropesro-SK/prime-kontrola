@@ -327,6 +327,33 @@ class DemandTests(unittest.TestCase):
         self.assertEqual(report["langs"]["sk"]["demand"], [])
 
 
+class VariantStockTests(unittest.TestCase):
+    def product(self):
+        p = product(20, "Urgent 229 S1 - Pracovná športová poltopánka", ["Obuv"], 22.19, manufacturer="Urgent")
+        p.update(stock=None, availability=None, availability_type=None)
+        def v(code, ean, stock, avail, typ, active):
+            return {"code": code, "ean": ean, "stock": stock, "availability": avail, "availability_type": typ,
+                    "active_yn": active, "prices": p["prices"], "descriptions": None}
+        p["variants"] = [v("109673", "5902365222446", 0, "Nie je na sklade", "NotAvailable", False),
+                         v("109675", "5902365222460", 1000000, "2-5 pracovné dni", "InStock", True),
+                         v("109676", "5902365222477", 0, "Na objednávku", "OnOrder", True)]
+        return p
+
+    def test_inactive_first_size_does_not_decide_availability(self):
+        d = normalize_product(self.product(), "sk")
+        self.assertTrue(d["in_stock"])
+        self.assertEqual(d["availability"], "2-5 pracovné dni")
+
+    def test_variant_code_and_ean_show_that_size(self):
+        idx = SearchIndex([normalize_product(self.product(), "sk")])
+        for q in ("5902365222460", "109675"):
+            _, res = idx.search(q)
+            self.assertEqual((res[0]["in_stock"], res[0]["availability"]), (True, "2-5 pracovné dni"))
+        _, res = idx.search("109676")
+        self.assertEqual((res[0]["in_stock"], res[0]["availability"]), (False, "Na objednávku"))
+        self.assertEqual(idx.search("5902365222446")[0], 0)  # inactive size is not offered
+
+
 class LocalizeTests(unittest.TestCase):
     def test_hungarian_shop_gets_hungarian_category_names(self):
         from ai_search.sync import localize_categories

@@ -319,6 +319,17 @@ class SearchIndex:
                 phrases += [t for t in targets if t not in phrases]
         return used, phrases
 
+    def _exact_doc(self, q):
+        """The product for an exact code / EAN. For a variant code, show that size's availability and price."""
+        doc = self.docs[self.exact[q]]
+        for code, (availability, in_stock, price) in (doc.get("variant_info") or {}).items():
+            if fold(code) == q:
+                doc = dict(doc, in_stock=in_stock, availability=availability or doc.get("availability"))
+                if price:
+                    doc["price"] = doc["price_max"] = price
+                break
+        return doc
+
     def strict_count(self, query):
         """How many products match every word of the query (typos, inflection and synonyms
         allowed). 0 means the shop has nothing for what the customer asked - used for statistics."""
@@ -376,7 +387,7 @@ class SearchIndex:
         filters = filters or {}
         q = fold(query).strip()
         if q in self.exact:
-            return 1, [self.docs[self.exact[q]]]
+            return 1, [self._exact_doc(q)]
 
         terms = tokenize(query)
         syn_used, syn_phrases = self.synonym_hits(query)
