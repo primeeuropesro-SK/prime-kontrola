@@ -129,8 +129,9 @@ def _load_categories(client, lang_codes):
     try:
         cats = list(client.paginate("categories", object_pairs_hook=_slim))
     except UpgatesError as e:
-        print(f"categories not loaded (missing API permission?): HTTP {e.status}", file=sys.stderr)
+        print(f"categories not loaded (missing API permission?): HTTP {e.status}", file=sys.stderr, flush=True)
         return out
+    print(f"categories loaded: {len(cats)}", file=sys.stderr, flush=True)
     # Pages that are only menu folders (they have sub-pages), the blog and everything under it,
     # and articles are never offered in the search.
     parents = {c.get("parent_id") for c in cats if c.get("parent_id")}

@@ -248,6 +248,8 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "PrimeAISearch/1.0"
 
     def log_message(self, fmt, *args):
+        if self.path.startswith(("/healthz", "/api/track")):
+            return  # Render's health check every 5 s and widget statistics would flood the log
         log.info("%s %s", self.address_string(), fmt % args)
 
     def _cors(self):
