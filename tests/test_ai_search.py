@@ -448,6 +448,21 @@ class OwnerSynonymTests(unittest.TestCase):
         self.assertNotIn("Pridať synonymum</button>", html_done)
 
 
+class AnswerLanguageTests(unittest.TestCase):
+    def test_hungarian_shop_asks_for_hungarian_answer_and_reasons(self):
+        docs = [d for d in (normalize_product(p, "hu") or normalize_product(p, "sk") for p in RAW) if d]
+        fake = FakeAnthropic([
+            {"keywords": ["zokni"], "categories": [], "manufacturers": [], "min_price": None, "max_price": None,
+             "in_stock_only": False, "summary": "Zoknit keresek."},
+            {"results": [{"id": docs[0]["id"], "reason": "jó"}]},
+        ])
+        q = ai_mod.QueryAI(client=fake)
+        q.understand("zokni", "hu", SearchIndex(docs))
+        q.rerank("zokni", "hu", docs[:2], 2)
+        self.assertIn("kizárólag magyarul", fake.calls[0]["messages"][0]["content"])
+        self.assertIn("kizárólag magyarul", fake.calls[1]["messages"][0]["content"])
+
+
 class AdminPagesTests(unittest.TestCase):
     def test_answers_joined_with_clicks_feedback_and_rating(self):
         import tempfile
