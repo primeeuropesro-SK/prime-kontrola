@@ -39,6 +39,9 @@ SYNC_INTERVAL_MIN = int(os.environ.get("SYNC_INTERVAL_MIN", "60"))
 AI_RATE_PER_MIN = int(os.environ.get("AI_RATE_PER_MIN", "20"))  # per IP, protects API costs
 POPULAR_MIN_USERS = int(os.environ.get("POPULAR_MIN_USERS", "3"))
 TRACK_RATE_PER_MIN = int(os.environ.get("TRACK_RATE_PER_MIN", "120"))
+# The search shows categories and products; brands and info pages only when switched on.
+SHOW_BRANDS = os.environ.get("SHOW_BRANDS", "0") == "1"
+SHOW_PAGES = os.environ.get("SHOW_PAGES", "0") == "1"
 PUBLIC_FIELDS = ("id", "code", "title", "url", "image", "price", "price_max", "currency",
                  "in_stock", "availability", "manufacturer", "categories")
 
@@ -144,8 +147,8 @@ class Store:
             "products": products,
             "suggestions": idx.suggest_queries(q),
             "categories": idx.suggest_categories(q),
-            "brands": idx.suggest_brands(q),
-            "pages": idx.suggest_pages(q),
+            "brands": idx.suggest_brands(q) if SHOW_BRANDS else [],
+            "pages": idx.suggest_pages(q) if SHOW_PAGES else [],
             "corrections": idx.corrections(q),
             "ai": {"summary": ai_info.get("summary"), "keywords": ai_info.get("keywords")} if ai_info else None,
             "took_ms": int((time.time() - t0) * 1000),

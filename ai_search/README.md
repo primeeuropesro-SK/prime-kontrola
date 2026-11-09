@@ -25,7 +25,8 @@ e-shop (widget.js) ──▶ /api/search ─────────────
   „Zobrazujem výsledky pre: procera zimná bunda“.
 - **Našepkávač** (ako Luigi's Box): počas písania dokončuje hľadané výrazy z katalógu
   („proc“ → „procera“, „procera z“ → „procera **zimná pracovná bunda**“, Tab výraz doplní), ponúka
-  kategórie, značky a informačné stránky (odkazy na e-shop) a vpravo produkty so zvýraznenou zhodou.
+  kategórie (odkazy na e-shop; značky a informačné stránky sa dajú zapnúť premennými `SHOW_BRANDS=1`
+  a `SHOW_PAGES=1`, blog a články sa nezobrazujú nikdy) a vpravo produkty so zvýraznenou zhodou.
   Po kliknutí do prázdneho poľa ukáže populárne vyhľadávania a obľúbené kategórie. Populárne sa
   zobrazia až keď výraz hľadali aspoň 3 rôzni návštevníci a obsahuje iba slová z katalógu.
   Odkazy na kategórie potrebujú v Upgates API právo **Kategórie → Iba čítanie**.
