@@ -143,6 +143,7 @@ def summarize(searches, products=None, top=20):
                 for q, n in query_counts.most_common(top)
             ],
             "not_found": top_queries(zero, 50),
+            "not_found_all": top_queries(zero, 500),
             "no_click_queries": top_queries(no_click, top),
         }
     return out
@@ -172,6 +173,65 @@ def build_report(log, products, week=None):
     return {"week": iso_week(start), "start": start.isoformat(), "end": end.isoformat(),
             "prev_week": iso_week(prev_start), "next_week": iso_week(start + timedelta(days=7)),
             "langs": cur, "prev": prev}
+
+
+DEMAND_MAX_QUERIES = 150
+DEMAND_REFRESH_SEC = 3 * 3600  # the running week is re-analysed at most every 3 hours
+
+
+def add_demand(report, ai, cache_dir, phrases_by_lang):
+    """Add report["langs"][lang]["demand"]: products customers looked for and did not find,
+    grouped by AI. Cached per week and language so viewing the report costs nothing."""
+    import hashlib
+    for lang, r in report["langs"].items():
+        counts = Counter()
+        for x in r.get("not_found_all", r["not_found"]):
+            counts[x["q"]] += x["count"]
+        for x in r.get("no_click_queries", []):
+            counts[x["q"]] += x["count"]
+        queries = [q for q, _ in counts.most_common(DEMAND_MAX_QUERIES)]
+        if not queries:
+            r["demand"] = []
+            continue
+        digest = hashlib.sha256(json.dumps(queries, ensure_ascii=False).encode()).hexdigest()[:16]
+        path = os.path.join(cache_dir, f"{report['week']}_{lang}.json")
+        cached = None
+        try:
+            with open(path, encoding="utf-8") as f:
+                cached = json.load(f)
+        except (FileNotFoundError, ValueError):
+            pass
+        fresh = cached and (cached.get("hash") == digest or time.time() - cached.get("t", 0) < DEMAND_REFRESH_SEC)
+        items = cached.get("items") if cached else None
+        if not fresh and ai is not None and getattr(ai, "enabled", False):
+            new = ai.product_demand(lang, queries, sorted(phrases_by_lang.get(lang, [])))
+            if new is not None:
+                items = new
+                os.makedirs(cache_dir, exist_ok=True)
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump({"hash": digest, "t": int(time.time()), "items": items}, f, ensure_ascii=False)
+        demand = []
+        for it in items or []:
+            qs = [q for q in it.get("queries", []) if q in counts]
+            if not qs:
+                continue
+            demand.append(dict(it, queries=sorted(qs, key=lambda q: -counts[q]), count=sum(counts[q] for q in qs)))
+        order = {"missing": 0, "synonym": 1, "unclear": 2}
+        demand.sort(key=lambda d: (order.get(d["status"], 3), -d["count"]))
+        r["demand"] = demand
+    return report
+
+
+def demand_csv(report):
+    buf = io.StringIO()
+    w = csv.writer(buf, delimiter=";")
+    w.writerow(["krajina", "produkt", "stav", "počet hľadaní", "ako hľadali", "výraz v katalógu", "poznámka"])
+    status = {"missing": "chýba v sortimente", "synonym": "máte – doplniť synonymum", "unclear": "nejasné"}
+    for lang, r in report["langs"].items():
+        for d in r.get("demand", []):
+            w.writerow([COUNTRY.get(lang, lang), d["product"], status.get(d["status"], d["status"]), d["count"],
+                        ", ".join(d["queries"]), d.get("catalog_phrase", ""), d.get("note", "")])
+    return "\ufeff" + buf.getvalue()
 
 
 # ---------------------------------------------------------------------- rendering
@@ -208,7 +268,8 @@ td.n{{text-align:right;white-space:nowrap}} a{{color:#1f5fbf}} .cols{{display:gr
         q = f"&token={e(token)}" if token else ""
         parts.append(f'<p class="nav"><a href="{e(base_url)}?week={e(report["prev_week"])}{q}">← predchádzajúci týždeň</a>'
                      f'<a href="{e(base_url)}?week={e(report["next_week"])}{q}">nasledujúci týždeň →</a>'
-                     f'<a href="{e(base_url)}/not-found.csv?week={e(report["week"])}{q}">hľadali a nenašli (CSV)</a></p>')
+                     f'<a href="{e(base_url)}/not-found.csv?week={e(report["week"])}{q}">hľadali a nenašli (CSV)</a>'
+                     f'<a href="{e(base_url)}/demand.csv?week={e(report["week"])}{q}">chýbajúce produkty (CSV)</a></p>')
     if not report["langs"]:
         parts.append('<p class="empty">V tomto týždni nie sú zaznamenané žiadne vyhľadávania.</p>')
     for lang, r in report["langs"].items():
@@ -221,6 +282,28 @@ td.n{{text-align:right;white-space:nowrap}} a{{color:#1f5fbf}} .cols{{display:gr
                      f'<div class="kpi"><b>{r["no_click"]}</b><span>s výsledkami, ale bez kliku</span></div>'
                      f'<div class="kpi"><b>{r["ai_searches"]}</b><span>AI vyhľadávaní, úspešnosť {r["ai_success_rate"]} %</span></div>'
                      "</div>")
+
+        demand = r.get("demand")
+        if demand:
+            missing = [d for d in demand if d["status"] == "missing"]
+            syn = [d for d in demand if d["status"] == "synonym"]
+            parts.append("<h3>Čo zákazníci hľadajú a nemáte</h3>")
+            if missing:
+                parts.append("<table><tr><th>Produkt</th><th>Hľadaní</th><th>Ako hľadali</th><th>Poznámka</th></tr>" + "".join(
+                    f"<tr><td><b>{e(d['product'])}</b></td><td class='n'>{d['count']}</td>"
+                    f"<td>{e(', '.join(d['queries'][:6]))}</td><td>{e(d.get('note', ''))}</td></tr>" for d in missing)
+                    + "</table>")
+            else:
+                parts.append("<p class='empty'>Tento týždeň zákazníci nehľadali nič, čo by v sortimente chýbalo.</p>")
+            if syn:
+                parts.append("<h3>Máte, ale zákazníci to volajú inak – doplňte synonymum</h3>"
+                             "<table><tr><th>Zákazník hľadal</th><th>Hľadaní</th><th>Výraz v katalógu</th></tr>" + "".join(
+                                 f"<tr><td>{e(', '.join(d['queries'][:6]))}</td><td class='n'>{d['count']}</td>"
+                                 f"<td>{e(d.get('catalog_phrase', ''))}</td></tr>" for d in syn) + "</table>")
+                snippet = {lang: {q: [d["catalog_phrase"]] for d in syn if d.get("catalog_phrase") for q in d["queries"]}}
+                parts.append("<p class='sub'>Na skopírovanie do <code>ai_search/synonyms.json</code>:</p>"
+                             f"<pre style='background:#fff;padding:10px;border-radius:10px;overflow:auto'>"
+                             f"{e(json.dumps(snippet, ensure_ascii=False, indent=2))}</pre>")
 
         def table(title, head, rows):
             if not rows:

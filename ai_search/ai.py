@@ -181,6 +181,58 @@ class QueryAI:
                 out.append({"customer": c, "catalog": it["catalog"]})
         return out
 
+    # --------------------------------------------------------- product demand
+    def product_demand(self, lang, queries, phrases):
+        """Group searches that found nothing into products the shop could add.
+
+        queries: [str] typed by customers; phrases: the catalogue's own phrases.
+        Returns [{"product", "queries", "status", "catalog_phrase", "note"}] or None.
+        status: missing = the shop does not sell it, synonym = it does but customers call it
+        differently (catalog_phrase = the catalogue's word), unclear = nonsense / not a product."""
+        if not (self.enabled and queries):
+            return None
+        schema = {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "product": {"type": "string"},
+                            "queries": {"type": "array", "items": {"type": "string", "enum": queries}},
+                            "status": {"type": "string", "enum": ["missing", "synonym", "unclear"]},
+                            "catalog_phrase": {"type": "string", "enum": [""] + phrases},
+                            "note": {"type": "string"},
+                        },
+                        "required": ["product", "queries", "status", "catalog_phrase", "note"],
+                        "additionalProperties": False,
+                    },
+                }
+            },
+            "required": ["items"],
+            "additionalProperties": False,
+        }
+        system = (
+            "Si nákupca e-shopu s pracovným oblečením, obuvou, rukavicami a OOPP. Dostaneš výrazy, ktoré "
+            "zákazníci hľadali a e-shop k nim nenašiel vhodný produkt, a zoznam výrazov, ktoré katalóg používa. "
+            "Zoskup výrazy, ktoré znamenajú ten istý produkt (preklepy, synonymá, iné tvary, iný jazyk). "
+            "Pre každú skupinu: product = krátky výstižný názov produktu PO SLOVENSKY (aj keď zákazníci písali "
+            "po maďarsky), status = 'synonym' ak e-shop taký produkt podľa zoznamu katalógu zjavne predáva a "
+            "zákazník ho len nazval inak (catalog_phrase = zodpovedajúci výraz z katalógu), 'missing' ak ho "
+            "katalóg nemá (catalog_phrase = ''), 'unclear' pre nezmysly, testy a výrazy, ktoré nie sú produkt "
+            "(catalog_phrase = ''). note = jedna krátka veta po slovensky pre majiteľa e-shopu (napr. čo by "
+            "malo byť v sortimente: typ, norma, použitie). Každý výraz zaraď do najviac jednej skupiny."
+        )
+        user = (f"Jazyk zákazníkov: {LANG_NAMES.get(lang, lang)}\nHľadané výrazy:\n" + "\n".join(queries)
+                + "\n\nVýrazy katalógu:\n" + "\n".join(phrases))
+        try:
+            result = self._call(system, user, schema, max_tokens=16000)
+        except Exception as e:
+            log.warning("AI product demand failed: %s", e)
+            return None
+        return result["items"] if result else None
+
     # ----------------------------------------------------------------- rerank
     def rerank(self, query, lang, candidates, limit):
         """Return [(product_id, reason)] ordered by relevance, or None."""

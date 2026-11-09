@@ -80,6 +80,14 @@ class Store:
         if changed:
             self.apply_synonyms()
 
+    def phrases_by_lang(self):
+        with self.lock:
+            return {lang: [ph for ph, _ in idx.phrases] for lang, idx in self.indexes.items()}
+
+    def report(self, week=None):
+        report = analytics.build_report(EVENTS, self.products_by_id(), week)
+        return analytics.add_demand(report, self.ai, os.path.join(sync.DATA_DIR, "demand"), self.phrases_by_lang())
+
     def products_by_id(self):
         with self.lock:
             return {lang: {d["id"]: (d["title"], d.get("url")) for d in idx.docs} for lang, idx in self.indexes.items()}
@@ -322,18 +330,18 @@ class Handler(BaseHTTPRequestHandler):
             self._cors()
             self.end_headers()
             return
-        if url.path in ("/report", "/report/not-found.csv"):
+        if url.path in ("/report", "/report/not-found.csv", "/report/demand.csv"):
             qs = parse_qs(url.query)
             token = qs.get("token", [""])[0]
             if not _token_ok(token):
                 return self._send(403, b"<h1>403</h1><p>Chyba alebo chybny token.</p>", "text/html; charset=utf-8")
             try:
-                report = analytics.build_report(EVENTS, STORE.products_by_id(), qs.get("week", [None])[0])
+                report = STORE.report(qs.get("week", [None])[0])
             except ValueError:
                 return self._send(400, {"error": "week must look like 2026-W45"})
             if url.path.endswith(".csv"):
-                return self._send(200, analytics.not_found_csv(report).encode("utf-8"), "text/csv; charset=utf-8",
-                                  cache="no-store")
+                body = analytics.demand_csv(report) if "demand" in url.path else analytics.not_found_csv(report)
+                return self._send(200, body.encode("utf-8"), "text/csv; charset=utf-8", cache="no-store")
             page = analytics.render_html(report, STORE.domains, "/report", token)
             return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8", cache="no-store")
         if url.path == "/widget.js":
@@ -377,7 +385,7 @@ def _weekly_loop():
                         state = json.load(f)
                 except (FileNotFoundError, ValueError):
                     state = {}
-                report = analytics.build_report(EVENTS, STORE.products_by_id())
+                report = STORE.report()
                 if state.get("sent_week") != report["week"]:
                     if mailer.configured():
                         mailer.send(f"Report vyhľadávania {report['week']}", analytics.render_html(report, STORE.domains))

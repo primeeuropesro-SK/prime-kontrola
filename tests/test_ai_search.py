@@ -279,6 +279,45 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(analytics.week_range(week)[0], today - timedelta(days=today.weekday()))
 
 
+class DemandTests(unittest.TestCase):
+    def test_groups_missing_products_and_caches(self):
+        import tempfile
+        from ai_search import analytics
+
+        class FakeAI:
+            enabled, calls = True, 0
+
+            def product_demand(self, lang, queries, phrases):
+                FakeAI.calls += 1
+                return [
+                    {"product": "Zváračská kukla", "queries": ["zvaracska kukla", "kukla na zvaranie"], "status": "missing",
+                     "catalog_phrase": "", "note": "Samostmievacia kukla, norma EN 175."},
+                    {"product": "Overal", "queries": ["kombinezon"], "status": "synonym", "catalog_phrase": "overal", "note": ""},
+                    {"product": "?", "queries": ["xyzzy"], "status": "unclear", "catalog_phrase": "", "note": ""},
+                ]
+
+        report = {"week": "2026-W46", "langs": {"sk": {
+            "not_found": [{"q": "zvaracska kukla", "count": 3}, {"q": "kukla na zvaranie", "count": 2},
+                          {"q": "kombinezon", "count": 4}, {"q": "xyzzy", "count": 1}],
+            "no_click_queries": []}}, "prev": {}}
+        d = tempfile.mkdtemp()
+        analytics.add_demand(report, FakeAI(), d, {"sk": ["overal"]})
+        dem = report["langs"]["sk"]["demand"]
+        self.assertEqual((dem[0]["product"], dem[0]["count"], dem[0]["status"]), ("Zváračská kukla", 5, "missing"))
+        self.assertEqual(dem[1]["status"], "synonym")
+        analytics.add_demand(report, FakeAI(), d, {"sk": ["overal"]})  # same data -> cached, no new AI call
+        self.assertEqual(FakeAI.calls, 1)
+        csv_text = analytics.demand_csv(report)
+        self.assertIn("Zváračská kukla;chýba v sortimente;5", csv_text)
+
+    def test_without_ai_report_still_works(self):
+        import tempfile
+        from ai_search import analytics
+        report = {"week": "2026-W46", "langs": {"sk": {"not_found": [{"q": "kukla", "count": 1}], "no_click_queries": []}}, "prev": {}}
+        analytics.add_demand(report, None, tempfile.mkdtemp(), {})
+        self.assertEqual(report["langs"]["sk"]["demand"], [])
+
+
 class AITests(unittest.TestCase):
     def test_understand_and_rerank(self):
         docs = [d for d in (normalize_product(p, "sk") for p in RAW) if d]

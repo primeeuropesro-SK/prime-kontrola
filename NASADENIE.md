@@ -116,6 +116,12 @@ Predvolene ukazuje minulý týždeň (pondelok – nedeľa), odkazmi sa dá prej
 Pre každú krajinu (Slovensko, Maďarsko) obsahuje:
 
 - počet vyhľadávaní, **úspešnosť** (podiel vyhľadávaní s klikom na produkt) a porovnanie s predchádzajúcim týždňom,
+- **Čo zákazníci hľadajú a nemáte** – AI (Claude Haiku) zoskupí nenájdené výrazy do konkrétnych produktov
+  (napr. „zvaracska kukla“, „kukla na zváranie“, „zváračská maska“ → *Zváračská kukla, 9 hľadaní*),
+  zoradí ich podľa počtu hľadaní a pripíše poznámku, čo by malo byť v sortimente. Na stiahnutie ako
+  **chýbajúce produkty (CSV)** pre Excel. Pri maďarskom e-shope sú názvy produktov po slovensky.
+- **Máte, ale zákazníci to volajú inak** – výrazy, pre ktoré produkt máte, s hotovým textom na skopírovanie
+  do `ai_search/synonyms.json`,
 - **top 20 produktov**, na ktoré zákazníci klikli z vyhľadávania,
 - **hľadali a nenašli** – výrazy, pre ktoré e-shop nemá produkt so všetkými hľadanými slovami (aj ako CSV pre Excel),
 - výrazy, pri ktorých výsledky boli, ale zákazník neklikol, a top 20 hľadaných výrazov,
