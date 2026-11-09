@@ -17,7 +17,10 @@
   var script = document.currentScript || document.querySelector('script[src*="widget.js"]');
   var ds = (script && script.dataset) || {};
   var API = (ds.api || (script ? new URL(script.src).origin : "")).replace(/\/$/, "");
-  var LANG = (ds.lang || document.documentElement.lang || "sk").slice(0, 2).toLowerCase();
+  // The page's own language (Upgates sets <html lang="sk"> / "hu") wins, so one shared script
+  // works for every language version; data-lang is only a fallback.
+  var PAGE_LANG = (document.documentElement.lang || "").slice(0, 2).toLowerCase();
+  var LANG = (/^(sk|hu|cs)$/.test(PAGE_LANG) ? PAGE_LANG : (ds.lang || "sk")).slice(0, 2).toLowerCase();
   var SELECTOR = ds.input || 'input[name="q"], input[name="search"], input[name="fulltext"], input[type="search"]';
   var ENTER_MODE = ds.enter || "ai";
   var TOUCH = window.matchMedia && window.matchMedia("(hover: none)").matches;
