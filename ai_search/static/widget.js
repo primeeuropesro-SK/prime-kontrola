@@ -47,7 +47,7 @@
           fav: "Kedvencekhez", cmp: "Összehasonlításhoz", favDone: "Hozzáadva a kedvencekhez",
           cmpDone: "Hozzáadva az összehasonlításhoz", actFail: "Nem sikerült, megnyitom a terméket…",
           sugg: "Keresési javaslatok", popular: "Népszerű keresések", cats: "Kategóriák", topCats: "Népszerű kategóriák",
-          brands: "Márkák", pages: "Információk", products: "Termékek", placeholder: "Gyere, keressük meg, az AI is segít majd 🤖", close: "Bezár" }
+          brands: "Márkák", pages: "Információk", products: "Termékek", placeholder: "Gyere, keressük meg, az AI is segít 🤖", close: "Bezár" }
   };
   var t = T[LANG] || T.sk;
 
