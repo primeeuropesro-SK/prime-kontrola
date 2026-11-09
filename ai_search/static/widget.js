@@ -28,14 +28,18 @@
 
   var T = {
     sk: { ai: "Opýtať sa AI", aiHint: "Napíšte vlastnými slovami, čo potrebujete",
-          thinking: "AI hľadá najvhodnejšie produkty…", all: "Zobraziť všetky výsledky", none: "Nič sme nenašli. Skúste to opísať inak alebo sa opýtajte AI.",
+          thinking: "AI hľadá najvhodnejšie produkty…",
+          steps: ["Rozumiem, čo hľadáte…", "Prehľadávam celý katalóg…", "Vyberám najvhodnejšie produkty…", "Ešte chvíľku…"],
+          aiSlow: "AI teraz neodpovedá, zobrazujem bežné výsledky.", all: "Zobraziť všetky výsledky", none: "Nič sme nenašli. Skúste to opísať inak alebo sa opýtajte AI.",
           inStock: "Skladom", outStock: "Na objednávku", from: "od ", fixed: "Výsledky pre:",
           fav: "Pridať do obľúbených", cmp: "Pridať do porovnania", favDone: "Pridané do obľúbených",
           cmpDone: "Pridané do porovnania", actFail: "Nepodarilo sa, otváram produkt…",
           sugg: "Hľadané výrazy", popular: "Populárne vyhľadávania", cats: "Kategórie", topCats: "Obľúbené kategórie",
           brands: "Značky", pages: "Informácie", products: "Produkty", placeholder: "Čo hľadáte?", close: "Zavrieť" },
     hu: { ai: "Kérdezd az AI-t", aiHint: "Írd le a saját szavaiddal, mire van szükséged",
-          thinking: "Az AI keresi a legjobb termékeket…", all: "Összes találat", none: "Nincs találat. Próbáld másképp leírni, vagy kérdezd az AI-t.",
+          thinking: "Az AI keresi a legjobb termékeket…",
+          steps: ["Értem, mit keresel…", "Átnézem a teljes kínálatot…", "Kiválasztom a legmegfelelőbb termékeket…", "Még egy pillanat…"],
+          aiSlow: "Az AI most nem válaszol, a szokásos találatokat mutatom.", all: "Összes találat", none: "Nincs találat. Próbáld másképp leírni, vagy kérdezd az AI-t.",
           inStock: "Raktáron", outStock: "Rendelésre", from: "", fixed: "Találatok erre:",
           fav: "Kedvencekhez", cmp: "Összehasonlításhoz", favDone: "Hozzáadva a kedvencekhez",
           cmpDone: "Hozzáadva az összehasonlításhoz", actFail: "Nem sikerült, megnyitom a terméket…",
@@ -80,6 +84,13 @@
     ".pas-spin{display:inline-block;width:14px;height:14px;border:2px solid #f39200;border-right-color:transparent;" +
     "border-radius:50%;animation:pasr .7s linear infinite;vertical-align:-2px;margin-right:8px}" +
     "@keyframes pasr{to{transform:rotate(360deg)}}" +
+    ".pas-bar{height:3px;background:linear-gradient(90deg,#f39200,#e4572e,#ffd08a,#f39200);background-size:200% 100%;" +
+    "animation:pasbar 1.1s linear infinite}@keyframes pasbar{to{background-position:-200% 0}}" +
+    ".pas-load{padding:16px 14px 6px}.pas-load-h{display:flex;align-items:center;gap:12px}" +
+    ".pas-load-h .pas-spin{width:28px;height:28px;border-width:3px;margin:0;flex:none}" +
+    ".pas-load-t{font-weight:700;font-size:15px;color:#222}.pas-step{color:#777;font-size:13px;margin-top:2px;min-height:18px}" +
+    ".pas-sk{display:flex;gap:12px;align-items:center;padding:10px 14px}.pas-sk i{display:block;border-radius:6px;" +
+    "background:linear-gradient(90deg,#eee,#f7f7f7,#eee);background-size:200% 100%;animation:pasbar 1.4s linear infinite}" +
     // chips (phone): categories / brands in one horizontally scrollable row
     ".pas-chips{display:flex;gap:8px;overflow-x:auto;padding:8px 14px 10px;scrollbar-width:none;-webkit-overflow-scrolling:touch}" +
     ".pas-chips::-webkit-scrollbar{display:none}" +
@@ -293,20 +304,56 @@
     }
     function show(html) { if (html) { box.innerHTML = html; active = -1; o.show(); } else { o.hide(); } }
 
+    var stepTimer = null;
+    function loadingHtml() {
+      var sk = "";
+      for (var i = 0; i < 3; i++) {
+        sk += '<div class="pas-sk"><i style="width:56px;height:56px;flex:none"></i><div style="flex:1">' +
+          '<i style="height:12px;width:' + (80 - i * 12) + '%"></i><i style="height:10px;width:40%;margin-top:8px"></i></div>' +
+          '<i style="width:48px;height:14px"></i></div>';
+      }
+      return '<div class="pas-bar"></div><div class="pas-load" role="status" aria-live="polite"><div class="pas-load-h">' +
+        '<span class="pas-spin"></span><div><div class="pas-load-t">✨ ' + esc(t.thinking) + '</div>' +
+        '<div class="pas-step" data-pas-step>' + esc(t.steps[0]) + "</div></div></div></div>" + sk;
+    }
+    function stopSteps() { clearInterval(stepTimer); stepTimer = null; }
+
     function search(q, ai) {
       var my = ++seq;
-      if (ai) show('<div class="pas-msg"><span class="pas-spin"></span>' + esc(t.thinking) + "</div>");
+      stopSteps();
+      var ctrl = window.AbortController ? new AbortController() : null;
+      var timeout = null;
+      if (ai) {
+        show(loadingHtml());
+        var step = 0;
+        stepTimer = setInterval(function () {
+          var el = box.querySelector("[data-pas-step]");
+          if (!el || my !== seq) return stopSteps();
+          step = Math.min(step + 1, t.steps.length - 1);
+          el.textContent = t.steps[step];
+        }, 1800);
+        // Never leave the customer waiting: after 20 s show the normal results instead.
+        if (ctrl) timeout = setTimeout(function () { ctrl.abort(); }, 20000);
+      }
       var url = API + "/api/search?lang=" + encodeURIComponent(LANG) + "&limit=" + (ai ? 10 : (o.compact ? 8 : 6)) +
         "&ai=" + (ai ? 1 : 0) + "&q=" + encodeURIComponent(q);
-      fetch(url, { credentials: "omit" }).then(function (r) { return r.json(); }).then(function (data) {
+      fetch(url, { credentials: "omit", signal: ctrl ? ctrl.signal : undefined }).then(function (r) { return r.json(); }).then(function (data) {
+        clearTimeout(timeout);
         if (my !== seq) return; // a newer query is already running
+        stopSteps();
         lastData = data;
-        show(q ? renderResults(data, ai, o.compact, !!o.form()) : renderEmpty(data, o.compact));
+        if (ai && !data.ai && !data.error) toast(t.aiSlow);
+        show(q ? renderResults(data, ai && !!data.ai, o.compact, !!o.form()) : renderEmpty(data, o.compact));
         // A query the customer stopped typing at counts as a search in the statistics.
         clearTimeout(idle);
         if (q && !ai) idle = setTimeout(function () { if (field.value === q) track("search", q); }, 1500);
         if (ai && o.compact) field.blur(); // hide the phone keyboard so the AI answer is visible
-      }).catch(function () { if (my === seq && ai) o.hide(); });
+      }).catch(function () {
+        clearTimeout(timeout);
+        if (my !== seq) return;
+        stopSteps();
+        if (ai) { toast(t.aiSlow); search(q, false); } // fall back to the instant results, never a blank panel
+      });
     }
     function applyQuery(q) {
       field.value = q;
