@@ -3,7 +3,8 @@
  * <script src="https://VAS-SERVER/widget.js" defer
  *         data-lang="sk"                       (optional, default <html lang>)
  *         data-input="input[name='q']"        (optional CSS selector of the shop's search box)
- *         data-enter="ai"></script>            (ai = Enter runs AI search, native = keep shop search)
+ *         data-enter="ai"                      (ai = Enter runs AI search, native = keep shop search)
+ *         data-placeholder="..."></script>     (optional text in the phone's full-screen search box)
  *
  * Desktop: a two-column suggestion panel under the shop's search box.
  * Phone (<= 640 px): tapping the search box opens a full-screen search; ✕ or the phone's
@@ -36,7 +37,7 @@
           fav: "Pridať do obľúbených", cmp: "Pridať do porovnania", favDone: "Pridané do obľúbených",
           cmpDone: "Pridané do porovnania", actFail: "Nepodarilo sa, otváram produkt…",
           sugg: "Hľadané výrazy", popular: "Populárne vyhľadávania", cats: "Kategórie", topCats: "Obľúbené kategórie",
-          brands: "Značky", pages: "Informácie", products: "Produkty", placeholder: "Čo hľadáte?", close: "Zavrieť" },
+          brands: "Značky", pages: "Informácie", products: "Produkty", placeholder: "Poď hľadať a pomôže aj Ai 🤖", close: "Zavrieť" },
     hu: { ai: "Kérdezd az AI-t", aiHint: "Írd le a saját szavaiddal, mire van szükséged",
           thinking: "Az AI keresi a legjobb termékeket…",
           steps: ["Értem, mit keresel…", "Átnézem a teljes kínálatot…", "Kiválasztom a legmegfelelőbb termékeket…", "Még egy pillanat…"],
@@ -46,7 +47,7 @@
           fav: "Kedvencekhez", cmp: "Összehasonlításhoz", favDone: "Hozzáadva a kedvencekhez",
           cmpDone: "Hozzáadva az összehasonlításhoz", actFail: "Nem sikerült, megnyitom a terméket…",
           sugg: "Keresési javaslatok", popular: "Népszerű keresések", cats: "Kategóriák", topCats: "Népszerű kategóriák",
-          brands: "Márkák", pages: "Információk", products: "Termékek", placeholder: "Mit keresel?", close: "Bezár" }
+          brands: "Márkák", pages: "Információk", products: "Termékek", placeholder: "Gyere, keressük meg, az AI is segít majd 🤖", close: "Bezár" }
   };
   var t = T[LANG] || T.sk;
 
@@ -106,6 +107,9 @@
     ".pas-ovh input{flex:1;min-width:0;font-size:16px;padding:11px 14px;border:1px solid #ccc;border-radius:12px;" +
     "background:#fff;color:#111;-webkit-appearance:none;appearance:none;outline:none}" +
     ".pas-ovh input:focus{border-color:#f39200}" +
+    ".pas-hint{padding:8px 16px 0;color:#888;font-size:13px}" +
+    ".pas-ovh input::placeholder{text-overflow:ellipsis;white-space:nowrap;overflow:hidden;color:#999;" +
+    "font-size:var(--pas-ph,16px)}" +
     ".pas-x{flex:none;width:44px;height:44px;border:0;background:none;font-size:24px;line-height:1;color:#444;cursor:pointer}" +
     ".pas-ovb{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}" +
     ".pas-ov .pas-s{min-height:46px;font-size:15px}.pas-ov .pas-item{min-height:72px}" +
@@ -489,9 +493,15 @@
     ov.style.display = "none";
     ov.setAttribute("role", "dialog");
     ov.innerHTML = '<form class="pas-ovh" action="#" role="search"><input type="search" enterkeyhint="search" autocomplete="off" ' +
-      'autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="' + esc(t.placeholder) + '">' +
+      'autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="' + esc(ds.placeholder || t.placeholder) + '">' +
       '<button type="button" class="pas-x" aria-label="' + esc(t.close) + '">✕</button></form><div class="pas-ovb"></div>';
     var field = ov.querySelector("input"), box = ov.querySelector(".pas-ovb");
+    var phText = field.placeholder;
+    var hint = document.createElement("div");
+    hint.className = "pas-hint";
+    hint.style.display = "none";
+    ov.querySelector(".pas-ovh").insertAdjacentElement("afterend", hint);
+    field.addEventListener("input", function () { if (!field.placeholder) hint.style.display = field.value ? "none" : "block"; });
     field.__pas = true; // never treat our own field as a shop search box
     document.body.appendChild(ov);
     var source = null, pushed = false;
@@ -524,11 +534,37 @@
     box.addEventListener("touchstart", function () { field.blur(); }, { passive: true });
     window.addEventListener("popstate", function () { close(true); }); // phone Back button closes the search
 
+    // Shrink the placeholder (not the typed text) so a long hint fits the phone's width.
+    function fitPlaceholder() {
+      try {
+        var cs = getComputedStyle(field);
+        var avail = field.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 30; // room for the clear (×) button
+        var probe = document.createElement("span");
+        probe.style.cssText = "position:absolute;visibility:hidden;white-space:nowrap;font-size:16px;font-family:" + cs.fontFamily;
+        field.placeholder = phText;
+        probe.textContent = phText;
+        ov.appendChild(probe);
+        var w = probe.getBoundingClientRect().width;
+        probe.remove();
+        var size = w > avail ? Math.floor(16 * avail / w * 10) / 10 : 16;
+        if (size >= 12) {
+          field.style.setProperty("--pas-ph", size + "px");
+          hint.style.display = "none";
+        } else {
+          // Too long for this phone even at a small size: show it in full as a line under the field.
+          field.placeholder = "";
+          hint.textContent = phText;
+          hint.style.display = field.value ? "none" : "block";
+        }
+      } catch (e) { /* keep default size */ }
+    }
+
     overlay = {
       open: function (input) {
         source = input;
         field.value = input.value;
         ov.style.display = "flex";
+        fitPlaceholder();
         document.documentElement.classList.add("pas-lock");
         try { history.pushState({ pasSearch: 1 }, ""); pushed = true; } catch (e) { pushed = false; }
         field.focus();
