@@ -95,8 +95,8 @@ pravým tlačidlom → **Preskúmať**, skopírujte riadok `<input …>` a dopl�
 ## Prevádzka
 
 - Produkty sa z Upgates aktualizujú automaticky každú hodinu.
-- Okamžitá aktualizácia (napr. po pridaní nových produktov): v Renderi zistite hodnotu `ADMIN_TOKEN`
-  (Environment) a spustite:
+- Okamžitá aktualizácia (napr. po pridaní nových produktov alebo zmene API oprávnení): otvorte v prehliadači
+  `https://prime-ai-search.onrender.com/admin/sync?token=VAS_ADMIN_TOKEN`. Alebo cez príkazový riadok:
   ```bash
   curl -X POST -H "X-Admin-Token: VAS_TOKEN" https://search.primework.sk/admin/sync
   ```

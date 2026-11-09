@@ -123,7 +123,7 @@ def _slim(pairs):
 def _load_categories(client, lang_codes):
     """Category / brand / info-page URLs per language. Needs the "Kategórie" read permission;
     without it the search still works, the suggestions just are not clickable links."""
-    out = {code: {"categories": {}, "brands": {}, "pages": []} for code in lang_codes}
+    out = {code: {"categories": {}, "brands": {}, "pages": [], "category_names": {}} for code in lang_codes}
     try:
         cats = list(client.paginate("categories", object_pairs_hook=_slim))
     except UpgatesError as e:
@@ -134,7 +134,10 @@ def _load_categories(client, lang_codes):
             continue
         for d in c.get("descriptions") or []:
             lang, name, url = d.get("language"), (d.get("name") or "").strip(), d.get("url")
-            if lang not in out or not name or not url:
+            if lang not in out or not name:
+                continue
+            out[lang]["category_names"][str(c["category_id"])] = name
+            if not url:
                 continue
             if c.get("manufacturer"):
                 out[lang]["brands"][c["manufacturer"]] = url
@@ -160,7 +163,27 @@ def build_catalog(client=None):
             doc = normalize_product(p, code, lang["domain"] or "")
             if doc:
                 lang["products"].append(doc)
+    default_lang = langs[0]["language_id"] if langs else None
+    for code, lang in catalog["languages"].items():
+        localize_categories(lang, keep_untranslated=(code == default_lang))
     return catalog
+
+
+def localize_categories(lang, keep_untranslated):
+    """Upgates returns product category names only in the shop's main language. Replace them
+    with this language's names from the categories API. Without those (no "Kategórie" API
+    permission) other languages get no category names rather than Slovak ones."""
+    names = lang.get("category_names") or {}
+    for doc in lang["products"]:
+        ids = [str(i) for i in doc.get("category_ids", [])]
+        localized = []
+        for cid, original in zip(ids, doc.get("categories", [])):
+            if cid in names:
+                localized.append(names[cid])
+            elif keep_untranslated:
+                localized.append(original)
+        doc["categories"] = localized
+        doc["category_ids"] = [cid for cid in ids if cid in names or keep_untranslated]
 
 
 def save_catalog(catalog, path=CATALOG_PATH):

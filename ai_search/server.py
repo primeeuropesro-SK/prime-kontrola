@@ -334,6 +334,13 @@ class Handler(BaseHTTPRequestHandler):
             self._cors()
             self.end_headers()
             return
+        if url.path == "/admin/sync":
+            # Reload products from Upgates now (e.g. after changing API permissions); opened in a browser.
+            if not _token_ok(parse_qs(url.query).get("token", [""])[0]):
+                return self._send(403, b"<h1>403</h1><p>Chyba alebo chybny token.</p>", "text/html; charset=utf-8")
+            threading.Thread(target=_initial_sync, daemon=True).start()
+            return self._send(200, "<meta charset='utf-8'><p>Aktualizácia katalógu z Upgates sa spustila. Potrvá asi "
+                                   "3–5 minút, potom stránku e-shopu obnovte.</p>".encode("utf-8"), "text/html; charset=utf-8")
         if url.path in ("/report", "/report/not-found.csv", "/report/demand.csv"):
             qs = parse_qs(url.query)
             token = qs.get("token", [""])[0]
