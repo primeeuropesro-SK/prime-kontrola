@@ -322,6 +322,39 @@ class DemandTests(unittest.TestCase):
         self.assertEqual(report["langs"]["sk"]["demand"], [])
 
 
+class LocalizeTests(unittest.TestCase):
+    def test_hungarian_shop_gets_hungarian_category_names(self):
+        from ai_search.sync import localize_categories
+        doc = {"categories": ["Oblečenie", "Bundy"], "category_ids": [1, 2]}
+        hu = {"products": [dict(doc)], "category_names": {"1": "Ruházat", "2": "Kabátok"}}
+        localize_categories(hu, keep_untranslated=False)
+        self.assertEqual(hu["products"][0]["categories"], ["Ruházat", "Kabátok"])
+
+    def test_without_permission_no_slovak_names_in_hungarian_shop(self):
+        from ai_search.sync import localize_categories
+        doc = {"categories": ["Oblečenie"], "category_ids": [1]}
+        hu, sk = {"products": [dict(doc)]}, {"products": [dict(doc)]}
+        localize_categories(hu, keep_untranslated=False)
+        localize_categories(sk, keep_untranslated=True)
+        self.assertEqual(hu["products"][0]["categories"], [])
+        self.assertEqual(sk["products"][0]["categories"], ["Oblečenie"])
+
+
+class TokenTests(unittest.TestCase):
+    def test_plus_in_token_survives_url(self):
+        from urllib.parse import parse_qs
+        from ai_search import server
+        orig = server.ADMIN_TOKEN
+        server.ADMIN_TOKEN = "lWZa+T3kb/49="
+        try:
+            typed = parse_qs("token=lWZa+T3kb/49=")["token"][0]  # what the server receives: "lWZa T3kb/49="
+            self.assertTrue(server._token_ok(typed))
+            self.assertFalse(server._token_ok("wrong"))
+            self.assertFalse(server._token_ok(""))
+        finally:
+            server.ADMIN_TOKEN = orig
+
+
 class AITests(unittest.TestCase):
     def test_understand_and_rerank(self):
         docs = [d for d in (normalize_product(p, "sk") for p in RAW) if d]
