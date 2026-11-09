@@ -322,6 +322,21 @@ class DemandTests(unittest.TestCase):
         self.assertEqual(report["langs"]["sk"]["demand"], [])
 
 
+class TokenTests(unittest.TestCase):
+    def test_plus_in_token_survives_url(self):
+        from urllib.parse import parse_qs
+        from ai_search import server
+        orig = server.ADMIN_TOKEN
+        server.ADMIN_TOKEN = "lWZa+T3kb/49="
+        try:
+            typed = parse_qs("token=lWZa+T3kb/49=")["token"][0]  # what the server receives: "lWZa T3kb/49="
+            self.assertTrue(server._token_ok(typed))
+            self.assertFalse(server._token_ok("wrong"))
+            self.assertFalse(server._token_ok(""))
+        finally:
+            server.ADMIN_TOKEN = orig
+
+
 class AITests(unittest.TestCase):
     def test_understand_and_rerank(self):
         docs = [d for d in (normalize_product(p, "sk") for p in RAW) if d]

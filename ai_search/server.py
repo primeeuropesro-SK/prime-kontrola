@@ -220,7 +220,11 @@ def _track_allowed(ip):
 
 
 def _token_ok(token):
-    return bool(ADMIN_TOKEN) and hmac.compare_digest((token or "").encode(), ADMIN_TOKEN.encode())
+    """A '+' in a generated token arrives as a space in a URL query string - accept both."""
+    if not ADMIN_TOKEN:
+        return False
+    token = token or ""
+    return any(hmac.compare_digest(t.encode(), ADMIN_TOKEN.encode()) for t in (token, token.replace(" ", "+")))
 _rate = defaultdict(deque)
 _rate_lock = threading.Lock()
 

@@ -106,7 +106,7 @@ pravým tlačidlom → **Preskúmať**, skopírujte riadok `<input …>` a dopl�
 
 ## Týždenný report vyhľadávania
 
-Report je na adrese (token nájdete v Renderi: **prime-ai-search → Environment → ADMIN_TOKEN**):
+Report je na adrese (token nájdete v Renderi: **prime-ai-search → Environment → ADMIN_TOKEN**; odporúčame token iba z písmen a číslic):
 
 ```
 https://prime-ai-search.onrender.com/report?token=VAS_ADMIN_TOKEN
