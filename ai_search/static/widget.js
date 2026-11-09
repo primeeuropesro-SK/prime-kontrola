@@ -27,11 +27,15 @@
     sk: { ai: "Opýtať sa AI", aiHint: "Napíšte vlastnými slovami, čo potrebujete",
           thinking: "AI hľadá najvhodnejšie produkty…", all: "Zobraziť všetky výsledky", none: "Nič sme nenašli. Skúste to opísať inak alebo sa opýtajte AI.",
           inStock: "Skladom", outStock: "Na objednávku", from: "od ", fixed: "Výsledky pre:",
+          fav: "Pridať do obľúbených", cmp: "Pridať do porovnania", favDone: "Pridané do obľúbených",
+          cmpDone: "Pridané do porovnania", actFail: "Nepodarilo sa, otváram produkt…",
           sugg: "Hľadané výrazy", popular: "Populárne vyhľadávania", cats: "Kategórie", topCats: "Obľúbené kategórie",
           brands: "Značky", pages: "Informácie", products: "Produkty", placeholder: "Čo hľadáte?", close: "Zavrieť" },
     hu: { ai: "Kérdezd az AI-t", aiHint: "Írd le a saját szavaiddal, mire van szükséged",
           thinking: "Az AI keresi a legjobb termékeket…", all: "Összes találat", none: "Nincs találat. Próbáld másképp leírni, vagy kérdezd az AI-t.",
           inStock: "Raktáron", outStock: "Rendelésre", from: "", fixed: "Találatok erre:",
+          fav: "Kedvencekhez", cmp: "Összehasonlításhoz", favDone: "Hozzáadva a kedvencekhez",
+          cmpDone: "Hozzáadva az összehasonlításhoz", actFail: "Nem sikerült, megnyitom a terméket…",
           sugg: "Keresési javaslatok", popular: "Népszerű keresések", cats: "Kategóriák", topCats: "Népszerű kategóriák",
           brands: "Márkák", pages: "Információk", products: "Termékek", placeholder: "Mit keresel?", close: "Bezár" }
   };
@@ -41,7 +45,7 @@
     ".pas-panel{position:absolute;z-index:99999;background:#fff;color:#222;border:1px solid #ddd;border-radius:12px;" +
     "box-shadow:0 14px 36px rgba(0,0,0,.18);max-height:80vh;overflow:auto}" +
     ".pas-panel,.pas-ov{font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;box-sizing:border-box;text-align:left;color:#222}" +
-    ".pas-panel *,.pas-ov *{box-sizing:border-box}" +
+    ".pas-panel *,.pas-ov *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}" +
     ".pas-ai{display:flex;gap:10px;align-items:center;padding:8px 14px;border-bottom:1px solid #f0f0f0}" +
     ".pas-ai button{border:0;border-radius:999px;padding:6px 12px;font:600 13px/1.2 inherit;cursor:pointer;" +
     "background:linear-gradient(90deg,#f39200,#e4572e);color:#fff;white-space:nowrap}" +
@@ -60,8 +64,14 @@
     ".pas-item .pas-t{font-weight:500}.pas-item .pas-t b{font-weight:700}" +
     ".pas-item .pas-r{color:#2f7d32;font-size:12px;margin-top:2px}" +
     ".pas-item .pas-m{display:flex;gap:10px;font-size:12px;color:#777;margin-top:2px}" +
-    ".pas-item .pas-p{margin-left:auto;font-weight:700;color:#111;white-space:nowrap}" +
+    ".pas-item .pas-p{font-weight:700;color:#111;white-space:nowrap}" +
     ".pas-ok{color:#2f7d32}.pas-no{color:#b26a00}" +
+    ".pas-side{margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex:none}" +
+    ".pas-act{display:flex;gap:2px}.pas-act button{width:34px;height:34px;border:0;border-radius:8px;background:none;" +
+    "color:#888;font-size:17px;line-height:1;cursor:pointer;padding:0}.pas-act button:hover{background:#eef1f5;color:#e4572e}" +
+    ".pas-act button.pas-on{color:#e4572e}.pas-ov .pas-act button{width:42px;height:42px;font-size:19px}" +
+    ".pas-toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:2147483646;background:#222;color:#fff;" +
+    "padding:10px 16px;border-radius:999px;font:14px/1.3 system-ui,sans-serif;box-shadow:0 6px 20px rgba(0,0,0,.25)}" +
     ".pas-foot{display:block;padding:12px 14px;text-align:center;color:#e4572e;font-weight:600;cursor:pointer;text-decoration:none}" +
     ".pas-msg{padding:16px 14px;color:#666}" +
     ".pas-spin{display:inline-block;width:14px;height:14px;border:2px solid #f39200;border-right-color:transparent;" +
@@ -147,7 +157,51 @@
       '<div class="pas-m"><span class="' + (p.in_stock ? "pas-ok" : "pas-no") + '">' +
       esc(p.in_stock ? (p.availability || t.inStock) : t.outStock) + "</span>" +
       (p.manufacturer ? "<span>" + esc(p.manufacturer) + "</span>" : "") + "</div></div>" +
-      '<div class="pas-p">' + esc(price) + "</div></a>";
+      '<div class="pas-side"><div class="pas-p">' + esc(price) + "</div>" + (SHOP_ACTIONS(p.url)
+        ? '<div class="pas-act"><button type="button" data-pas-act="fav" data-url="' + esc(p.url) + '" title="' + esc(t.fav) +
+          '" aria-label="' + esc(t.fav) + '">♡</button><button type="button" data-pas-act="cmp" data-url="' + esc(p.url) +
+          '" title="' + esc(t.cmp) + '" aria-label="' + esc(t.cmp) + '">⇄</button></div>' : "") + "</div></a>";
+  }
+
+  // ------------------------------------------------------------------ favourites / compare
+  /* Uses the shop's own buttons: the widget loads the product page, finds Upgates'
+   * "function-favourites" / "function-compare" links and follows them in the background,
+   * so the product lands in the same favourites / comparison as from the shop itself. */
+  function SHOP_ACTIONS(url) {
+    try { return new URL(url, location.href).origin === location.origin; } catch (e) { return false; }
+  }
+  function toast(msg) {
+    var el = document.createElement("div");
+    el.className = "pas-toast";
+    el.textContent = msg;
+    document.body.appendChild(el);
+    setTimeout(function () { el.remove(); }, 2600);
+  }
+  function shopAction(kind, productUrl, button, closeSearch) {
+    var sel = kind === "fav" ? ".function-favourites" : ".function-compare";
+    button.disabled = true;
+    fetch(productUrl, { credentials: "include" }).then(function (r) { return r.text(); }).then(function (html) {
+      var a = new DOMParser().parseFromString(html, "text/html").querySelector(sel);
+      if (!a) throw new Error("button not found");
+      var target = a.getAttribute("data-target");
+      if (a.getAttribute("data-toggle") === "modal" && target) {
+        // Not logged in: open the shop's own login dialog, exactly like its button does.
+        closeSearch();
+        var opener = document.querySelector('[data-toggle="modal"][data-target="' + target + '"]');
+        if (opener) { opener.click(); } else { location.href = productUrl; }
+        return;
+      }
+      var href = new URL(a.getAttribute("href"), productUrl).href;
+      return fetch(href, { credentials: "include" }).then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        button.classList.add("pas-on");
+        if (kind === "fav") button.textContent = "♥";
+        toast(kind === "fav" ? t.favDone : t.cmpDone);
+      });
+    }).catch(function () {
+      toast(t.actFail);
+      setTimeout(function () { location.href = productUrl; }, 900);
+    }).then(function () { button.disabled = false; });
   }
 
   function renderEmpty(data, compact) {
@@ -297,6 +351,14 @@
       if ((el = e.target.closest("[data-pas-ai]"))) { e.preventDefault(); track("ai", field.value); search(field.value.trim(), true); if (!o.compact) field.focus(); return; }
       if ((el = e.target.closest("[data-pas-q]"))) { e.preventDefault(); applyQuery(el.getAttribute("data-pas-q")); if (o.compact) field.blur(); return; }
       if ((el = e.target.closest("[data-pas-all]"))) { e.preventDefault(); submitAll(); return; }
+      if ((el = e.target.closest("[data-pas-act]"))) {
+        e.preventDefault();
+        e.stopPropagation();
+        var item = el.closest("[data-pas-pid]");
+        if (item) track("click", field.value, item.getAttribute("data-pas-pid"));
+        shopAction(el.getAttribute("data-pas-act"), el.getAttribute("data-url"), el, o.close);
+        return;
+      }
       if ((el = e.target.closest("[data-pas-pid]"))) { track("click", field.value, el.getAttribute("data-pas-pid")); }
     });
 
