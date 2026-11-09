@@ -11,7 +11,9 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from upgates_client import UpgatesClient, UpgatesError  # noqa: E402
-from ai_search.search_engine import strip_html  # noqa: E402
+from ai_search.search_engine import fold, strip_html  # noqa: E402
+
+BLOG_NAMES = {"blog", "clanky", "clanok", "novinky z blogu", "magazin", "cikkek", "cikk", "magazin"}
 
 DATA_DIR = os.environ.get("AI_SEARCH_DATA_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 CATALOG_PATH = os.path.join(DATA_DIR, "catalog.json")
@@ -129,9 +131,23 @@ def _load_categories(client, lang_codes):
     except UpgatesError as e:
         print(f"categories not loaded (missing API permission?): HTTP {e.status}", file=sys.stderr)
         return out
+    # Pages that are only menu folders (they have sub-pages), the blog and everything under it,
+    # and articles are never offered in the search.
+    parents = {c.get("parent_id") for c in cats if c.get("parent_id")}
+    by_id = {c["category_id"]: c for c in cats}
+
+    def is_blog(c, depth=0):
+        if depth > 10 or c is None:
+            return False
+        names = {fold(d.get("name") or "").strip() for d in c.get("descriptions") or []}
+        if "article" in (c.get("type") or "") or names & BLOG_NAMES:
+            return True
+        return is_blog(by_id.get(c.get("parent_id")), depth + 1)
+
     for c in cats:
         if not c.get("active_yn") or c.get("exclude_from_search_yn"):
             continue
+        hidden_page = c.get("type") != "siteWithProducts" and (c["category_id"] in parents or is_blog(c))
         for d in c.get("descriptions") or []:
             lang, name, url = d.get("language"), (d.get("name") or "").strip(), d.get("url")
             if lang not in out or not name:
@@ -143,7 +159,7 @@ def _load_categories(client, lang_codes):
                 out[lang]["brands"][c["manufacturer"]] = url
             if c.get("type") == "siteWithProducts":
                 out[lang]["categories"][str(c["category_id"])] = {"name": name, "url": url}
-            elif c.get("type") in ("site", "contact", "article", "articles"):
+            elif c.get("type") in ("site", "contact") and not hidden_page:
                 out[lang]["pages"].append({"title": name, "url": url})
     return out
 

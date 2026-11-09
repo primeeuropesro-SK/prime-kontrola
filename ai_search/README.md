@@ -25,10 +25,16 @@ e-shop (widget.js) ──▶ /api/search ─────────────
   „Zobrazujem výsledky pre: procera zimná bunda“.
 - **Našepkávač** (ako Luigi's Box): počas písania dokončuje hľadané výrazy z katalógu
   („proc“ → „procera“, „procera z“ → „procera **zimná pracovná bunda**“, Tab výraz doplní), ponúka
-  kategórie, značky a informačné stránky (odkazy na e-shop) a vpravo produkty so zvýraznenou zhodou.
+  kategórie (odkazy na e-shop; značky a informačné stránky sa dajú zapnúť premennými `SHOW_BRANDS=1`
+  a `SHOW_PAGES=1`, blog a články sa nezobrazujú nikdy) a vpravo produkty so zvýraznenou zhodou.
   Po kliknutí do prázdneho poľa ukáže populárne vyhľadávania a obľúbené kategórie. Populárne sa
   zobrazia až keď výraz hľadali aspoň 3 rôzni návštevníci a obsahuje iba slová z katalógu.
   Odkazy na kategórie potrebujú v Upgates API právo **Kategórie → Iba čítanie**.
+- **Obľúbené ♡ a porovnanie ⇄** pri každom produkte vo výsledkoch. Widget použije tlačidlá e-shopu
+  (`function-favourites`, `function-compare` z detailu produktu), takže produkt pribudne do toho istého
+  porovnávača a obľúbených. Neprihlásenému zákazníkovi ♡ otvorí prihlasovacie okno e-shopu. Ak by
+  pridanie zlyhalo, otvorí sa detail produktu. Na testovacej stránke `/demo` sa ikony nezobrazujú
+  (fungujú iba priamo na doméne e-shopu).
 - **Mobil:** po ťuknutí do vyhľadávania sa otvorí vyhľadávanie cez celú obrazovku (pole hore, ✕ vpravo).
   Tlačidlo Späť na telefóne ho zavrie a zákazník ostane na tej istej stránke. Najviac 4 návrhy,
   kategórie a značky v jednom vodorovnom páse, hneď pod nimi produkty. Pri posúvaní výsledkov sa
