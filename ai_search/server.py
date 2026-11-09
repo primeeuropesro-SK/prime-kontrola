@@ -9,6 +9,7 @@ Endpoints
   GET  /healthz                                 status
   POST /admin/sync   (header X-Admin-Token)     reload products from Upgates now
 """
+import hashlib
 import json
 import logging
 import os
@@ -23,7 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ai_search import sync  # noqa: E402
 from ai_search.ai import QueryAI  # noqa: E402
-from ai_search.search_engine import SearchIndex  # noqa: E402
+from ai_search.search_engine import SearchIndex, tokenize  # noqa: E402
 
 log = logging.getLogger("ai_search")
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -35,6 +36,7 @@ ALLOWED_ORIGINS = [o.strip() for o in os.environ.get(
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
 SYNC_INTERVAL_MIN = int(os.environ.get("SYNC_INTERVAL_MIN", "60"))
 AI_RATE_PER_MIN = int(os.environ.get("AI_RATE_PER_MIN", "20"))  # per IP, protects API costs
+POPULAR_MIN_USERS = int(os.environ.get("POPULAR_MIN_USERS", "3"))
 PUBLIC_FIELDS = ("id", "code", "title", "url", "image", "price", "price_max", "currency",
                  "in_stock", "availability", "manufacturer", "categories")
 
@@ -47,7 +49,7 @@ class Store:
         self.ai = QueryAI()
 
     def load(self, catalog):
-        indexes = {lang: SearchIndex(data["products"]) for lang, data in catalog["languages"].items()}
+        indexes = {lang: SearchIndex(data["products"], data) for lang, data in catalog["languages"].items()}
         with self.lock:
             self.indexes = indexes
             self.meta = {"generated_at": catalog.get("generated_at"),
@@ -103,14 +105,67 @@ class Store:
             "lang": lang,
             "total": total,
             "products": products,
+            "suggestions": idx.suggest_queries(q),
             "categories": idx.suggest_categories(q),
+            "brands": idx.suggest_brands(q),
+            "pages": idx.suggest_pages(q),
             "corrections": idx.corrections(q),
             "ai": {"summary": ai_info.get("summary"), "keywords": ai_info.get("keywords")} if ai_info else None,
             "took_ms": int((time.time() - t0) * 1000),
         }
 
 
+class Popular:
+    """Popular searches shown when the search box is empty.
+
+    Only queries made of real catalogue words, typed by at least POPULAR_MIN_USERS
+    different visitors, are shown - so nobody can push arbitrary text to other customers.
+    """
+
+    def __init__(self, path):
+        self.path, self.lock, self.dirty = path, threading.Lock(), 0
+        self.data = defaultdict(dict)  # lang -> {query: [ip hashes]}
+        try:
+            with open(path, encoding="utf-8") as f:
+                for lang, qs in json.load(f).items():
+                    self.data[lang] = qs
+        except (FileNotFoundError, ValueError):
+            pass
+
+    def record(self, lang, q, ip, idx):
+        q = " ".join(q.lower().split())[:60]
+        terms = q.split()
+        if not (1 <= len(terms) <= 5) or idx is None:
+            return
+        if any(t not in idx.postings for t in tokenize(q)) or not tokenize(q):
+            return
+        h = hashlib.sha256((ip + "|prime").encode()).hexdigest()[:10]
+        with self.lock:
+            users = self.data[lang].setdefault(q, [])
+            if h not in users and len(users) < 200:
+                users.append(h)
+                self.dirty += 1
+            if self.dirty >= 10:
+                self._save()
+
+    def _save(self):
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            with open(self.path + ".tmp", "w", encoding="utf-8") as f:
+                json.dump(self.data, f, ensure_ascii=False)
+            os.replace(self.path + ".tmp", self.path)
+            self.dirty = 0
+        except OSError as e:
+            log.warning("cannot save popular searches: %s", e)
+
+    def top(self, lang, limit=8):
+        with self.lock:
+            items = [(q, len(u)) for q, u in self.data.get(lang, {}).items() if len(u) >= POPULAR_MIN_USERS]
+        return [q for q, _ in sorted(items, key=lambda x: -x[1])[:limit]]
+
+
 STORE = Store()
+POPULAR = Popular(os.path.join(sync.DATA_DIR, "popular.json"))
 _rate = defaultdict(deque)
 _rate_lock = threading.Lock()
 
@@ -182,11 +237,26 @@ class Handler(BaseHTTPRequestHandler):
             use_ai = qs.get("ai", ["0"])[0] == "1" and len(q) >= 3
             ai_limited = use_ai and not _ai_allowed(self._client_ip())
             if not q:
-                return self._send(200, {"query": "", "total": 0, "products": [], "categories": [], "corrections": {}, "ai": None})
+                idx = STORE.index(lang)
+                return self._send(200, {
+                    "query": "", "total": 0, "products": [], "suggestions": [], "brands": [], "pages": [],
+                    "corrections": {}, "ai": None,
+                    "popular": POPULAR.top(lang),
+                    "categories": idx.top_categories() if idx else [],
+                }, cache="no-store")
             result = STORE.search(q, lang, limit, use_ai and not ai_limited)
             if ai_limited:
                 result["ai_rate_limited"] = True
             return self._send(200 if "error" not in result else 503, result, cache="no-store")
+        if url.path == "/api/track":
+            # The widget reports a finished search (Enter, suggestion or product click).
+            qs = parse_qs(url.query)
+            lang = qs.get("lang", ["sk"])[0]
+            POPULAR.record(lang, (qs.get("q", [""])[0] or "")[:100], self._client_ip(), STORE.index(lang))
+            self.send_response(204)
+            self._cors()
+            self.end_headers()
+            return
         if url.path == "/widget.js":
             return self._static("widget.js", "application/javascript; charset=utf-8")
         if url.path in ("/", "/demo"):
