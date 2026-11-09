@@ -415,6 +415,39 @@ class RulesTests(unittest.TestCase):
         self.assertEqual(len(fake.calls), 2)
 
 
+class OwnerSynonymTests(unittest.TestCase):
+    def test_add_replace_block(self):
+        import tempfile
+        from ai_search import server
+        from ai_search.rules import Rules
+        orig = server.RULES
+        server.RULES = Rules(os.path.join(tempfile.mkdtemp(), "rules.json"))
+        try:
+            server.RULES.add_synonyms("sk", "Kombinezón, kombineza", "overal")
+            self.assertEqual(server.RULES.synonym_map("sk"), {"kombinezón": ["overal"], "kombineza": ["overal"]})
+            server.RULES.add_synonyms("sk", "kombinezon", "montérkové nohavice")  # edit = replace
+            self.assertEqual(server.RULES.synonym_map("sk")["kombinezon"], ["montérkové nohavice"])
+            self.assertNotIn("kombinezón", server.RULES.synonym_map("sk"))
+            self.assertEqual(server.RULES.add_synonyms("sk", "overal", "overal"), [])  # same word -> nothing
+            server.RULES.block_synonym("sk", "slúchadlá")  # switch off a file / automatic synonym
+            merged = server.STORE.synonyms_for("sk")
+            self.assertNotIn("slúchadlá", merged)
+            self.assertEqual(merged["kombinezon"], ["montérkové nohavice"])
+        finally:
+            server.RULES = orig
+
+    def test_report_row_has_add_button_until_added(self):
+        from ai_search import analytics
+        syn = [{"queries": ["kombinezón"], "count": 3, "catalog_phrase": "overal", "status": "synonym"}]
+        report = {"week": "2026-W46"}
+        html_form = analytics._synonym_table("sk", syn, "tok", report, "/report", set())
+        self.assertIn("Pridať synonymum", html_form)
+        self.assertIn("value='overal'", html_form)
+        html_done = analytics._synonym_table("sk", syn, "tok", report, "/report", {"kombinezon"})
+        self.assertIn("✔ pridané", html_done)
+        self.assertNotIn("Pridať synonymum</button>", html_done)
+
+
 class AdminPagesTests(unittest.TestCase):
     def test_answers_joined_with_clicks_feedback_and_rating(self):
         import tempfile

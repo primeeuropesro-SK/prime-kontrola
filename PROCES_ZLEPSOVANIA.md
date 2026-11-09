@@ -47,7 +47,7 @@ Označte **👍 Dobrá odpoveď** alebo **👎 Zlá odpoveď** a do poznámky na
 | Dobrý produkt je až na 4. mieste | **📌 Pripnúť pre tento výraz** pri tom produkte | pri produkte |
 | Medzi výsledkami je nevhodný produkt | **🚫 Skryť pre tento výraz** | pri produkte |
 | AI niečo pochopila zle všeobecne (napr. „do zimy“ = zateplené) | **➕ Pridať pokyn pre AI** – jedna jasná veta | pri odpovedi alebo v Pravidlách |
-| Zákazník použil slovo, ktoré katalóg nepozná | **Synonymum** – `ai_search/synonyms.json` na GitHube | GitHub |
+| Zákazník použil slovo, ktoré katalóg nepozná | **➕ Pridať synonymum** – v reporte („Máte, ale zákazníci to volajú inak“) alebo v Pravidlách → Synonymá | report / Pravidlá |
 | Produkt v sortimente nie je | Zoznam **„Čo zákazníci hľadajú a nemáte“** v reporte → zvážte doplnenie | report |
 | Produkt má zlý alebo chudobný názov / popis | Opravte názov či popis v Upgates – vyhľadávanie ho načíta do hodiny | Upgates |
 
@@ -69,6 +69,17 @@ výraz a stlačte Enter. Pripnutie, skrytie aj nový pokyn platia **okamžite**.
 ### 5. Sledujte výsledok o týždeň
 V reporte porovnajte **úspešnosť AI vyhľadávaní** s minulým týždňom a v AI odpovediach skontrolujte,
 či sa zlé odpovede na rovnaké výrazy už neopakujú.
+
+## Synonymá
+
+- **V reporte** v časti „Máte, ale zákazníci to volajú inak“ je pri každom riadku formulár:
+  vľavo slová zákazníka (viac oddeľte čiarkou), vpravo výraz z katalógu. Upravte podľa potreby
+  a kliknite **➕ Pridať synonymum**. Riadok sa zmení na „✔ pridané“.
+- **V Pravidlách → Synonymá** sú všetky synonymá so zdrojom (vy / súbor synonyms.json / AI automaticky):
+  - **upraviť**: zmeňte výraz v katalógu v riadku a kliknite **Uložiť**,
+  - **Zmazať** vaše synonymum, **Vypnúť** automatické alebo zo súboru (a **Zapnúť** späť),
+  - nové synonymum pridáte formulárom nad tabuľkou.
+- Všetko platí **okamžite** v okamžitom vyhľadávaní aj v našepkávači.
 
 ## Údržba pravidiel (raz za mesiac)
 Na stránke **Pravidlá** prejdite pripnuté a skryté produkty. Zmažte pravidlá pre produkty, ktoré

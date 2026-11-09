@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ai_search import admin_pages, analytics, mailer, rules, sync, synonyms  # noqa: E402
 from ai_search.ai import QueryAI  # noqa: E402
-from ai_search.search_engine import SearchIndex, tokenize  # noqa: E402
+from ai_search.search_engine import SearchIndex, fold, tokenize  # noqa: E402
 
 log = logging.getLogger("ai_search")
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -68,7 +68,15 @@ class Store:
         with self.lock:
             indexes = dict(self.indexes)
         for lang, idx in indexes.items():
-            idx.set_synonyms(synonyms.merged(sync.DATA_DIR, lang))
+            idx.set_synonyms(self.synonyms_for(lang))
+
+    def synonyms_for(self, lang):
+        """Automatic + synonyms.json + the owner's own from the report; switched-off ones removed."""
+        merged = synonyms.merged(sync.DATA_DIR, lang)
+        blocked = RULES.blocked(lang)
+        merged = {c: t for c, t in merged.items() if fold(c) not in blocked}
+        merged.update(RULES.synonym_map(lang))
+        return merged
 
     def refresh_synonyms(self):
         """Create / refresh the automatic synonym lists (one cheap AI call per language)."""
@@ -403,7 +411,10 @@ class Handler(BaseHTTPRequestHandler):
                 answers = admin_pages.ai_answers(EVENTS, start, end, RULES)
                 page = admin_pages.render_ai_page(answers, week, products, token, flt, STORE.domains)
             else:
-                page = admin_pages.render_rules_page(RULES, products, token, sorted(products) or ["sk"])
+                langs = sorted(products) or ["sk"]
+                sources = {l: {"file": synonyms.load_manual(l),
+                               "auto": (synonyms.load_auto(sync.DATA_DIR, l) or {}).get("items", [])} for l in langs}
+                page = admin_pages.render_rules_page(RULES, products, token, langs, sources)
             return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8", cache="no-store")
         if url.path in ("/report", "/report/not-found.csv", "/report/demand.csv", "/report/searches.csv"):
             qs = parse_qs(url.query)
@@ -419,7 +430,8 @@ class Handler(BaseHTTPRequestHandler):
                         else analytics.searches_csv(report) if "searches" in url.path
                         else analytics.not_found_csv(report))
                 return self._send(200, body.encode("utf-8"), "text/csv; charset=utf-8", cache="no-store")
-            page = analytics.render_html(report, STORE.domains, "/report", token)
+            known = {lang: {fold(c) for c in STORE.synonyms_for(lang)} for lang in report["langs"]}
+            page = analytics.render_html(report, STORE.domains, "/report", token, known)
             return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8", cache="no-store")
         if url.path == "/widget.js":
             return self._static("widget.js", "application/javascript; charset=utf-8")
@@ -483,8 +495,16 @@ def _handle_admin_action(form):
         if not q:
             return "Chýba výraz, pre ktorý má pravidlo platiť."
         (RULES.add_pin if action == "pin" else RULES.add_hide)(lang, q, pid)
+    elif action == "synonym":
+        if not RULES.add_synonyms(lang, form.get("customer", [""])[0], form.get("catalog", [""])[0]):
+            return "Vyplňte, čo píše zákazník, aj výraz z katalógu (musia sa líšiť)."
+        STORE.apply_synonyms()
+    elif action == "block_synonym":
+        RULES.block_synonym(lang, form.get("customer", [""])[0])
+        STORE.apply_synonyms()
     elif action == "delete":
         RULES.remove(form.get("rule_id", [""])[0])
+        STORE.apply_synonyms()
     else:
         return "Neznáma akcia."
     return None
