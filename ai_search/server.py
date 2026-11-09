@@ -424,8 +424,17 @@ def _initial_sync():
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
-        STORE.load(sync.load_catalog())
-        threading.Thread(target=STORE.refresh_synonyms, daemon=True).start()
+        catalog = sync.load_catalog()
+        STORE.load(catalog)
+        age_min = (time.time() - (catalog.get("generated_at") or 0)) / 60
+        old_format = any("category_names" not in lang for lang in catalog["languages"].values())
+        if age_min > max(SYNC_INTERVAL_MIN, 1) or old_format:
+            # Every deploy restarts the hourly timer, so refresh a stale catalogue right away.
+            log.info("cached catalog is %d min old%s, refreshing from Upgates in the background",
+                     age_min, " (old format)" if old_format else "")
+            threading.Thread(target=_initial_sync, daemon=True).start()
+        else:
+            threading.Thread(target=STORE.refresh_synonyms, daemon=True).start()
     except FileNotFoundError:
         # Start listening right away (hosting health checks), load products in the background.
         log.info("no cached catalog, syncing from Upgates in the background (takes a few minutes)...")
