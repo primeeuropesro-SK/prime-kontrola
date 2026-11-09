@@ -126,6 +126,53 @@ class TypoTests(unittest.TestCase):
         self.assertIsNone(self.first("xyz"))
 
 
+class AutocompleteTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        raw = RAW + [
+            product(7, "Procera Silus Winter KRT - Zimná pracovná bunda", ["Bundy"], 59.0, manufacturer="Procera"),
+            product(8, "Procera Luma Winter KRT - Zimná pracovná bunda", ["Bundy"], 49.0, manufacturer="Procera"),
+            product(9, "Procera Valor KRT - Softshellová pracovná bunda", ["Bundy"], 39.0, manufacturer="Procera"),
+        ]
+        docs = [d for d in (normalize_product(p, "sk") for p in raw) if d]
+        for d in docs:
+            d["category_ids"] = [1 if c == "Bundy" else 2 for c in d["categories"]]
+        extras = {"categories": {"1": {"name": "Bundy", "url": "https://shop/bundy"}},
+                  "pages": [{"title": "Záruka, reklamácie", "url": "https://shop/reklamacie"}]}
+        cls.idx = SearchIndex(docs, extras)
+
+    def test_completes_brand_and_phrase(self):
+        self.assertEqual(self.idx.suggest_queries("proc")[0], "procera")
+        self.assertIn("procera zimná pracovná bunda", self.idx.suggest_queries("procera z"))
+
+    def test_completion_tolerates_typos(self):
+        self.assertIn("procera zimná pracovná bunda", self.idx.suggest_queries("procere zimne"))
+
+    def test_category_and_page_links(self):
+        self.assertEqual(self.idx.suggest_categories("bunda")[0], {"name": "Bundy", "url": "https://shop/bundy"})
+        self.assertEqual(self.idx.suggest_pages("reklamacia")[0]["url"], "https://shop/reklamacie")
+
+    def test_brand_suggestion(self):
+        self.assertEqual(self.idx.suggest_brands("proc")[0]["name"], "Procera")
+
+
+class PopularTests(unittest.TestCase):
+    def test_needs_real_words_and_several_visitors(self):
+        import tempfile
+        from ai_search import server
+        idx = SearchIndex([d for d in (normalize_product(p, "sk") for p in RAW) if d])
+        pop = server.Popular(os.path.join(tempfile.mkdtemp(), "popular.json"))
+        for ip in ("1.1.1.1", "2.2.2.2"):
+            pop.record("sk", "Reflexná vesta", ip, idx)
+        self.assertEqual(pop.top("sk"), [])  # only 2 visitors so far
+        pop.record("sk", "reflexná vesta", "3.3.3.3", idx)
+        pop.record("sk", "reflexná vesta", "3.3.3.3", idx)  # same visitor again does not count
+        self.assertEqual(pop.top("sk"), ["reflexná vesta"])
+        for ip in ("1.1.1.1", "2.2.2.2", "3.3.3.3"):
+            pop.record("sk", "kúpte si lacné xyz", ip, idx)  # not catalogue words -> never shown
+        self.assertEqual(pop.top("sk"), ["reflexná vesta"])
+
+
 class AITests(unittest.TestCase):
     def test_understand_and_rerank(self):
         docs = [d for d in (normalize_product(p, "sk") for p in RAW) if d]

@@ -10,7 +10,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from upgates_client import UpgatesClient  # noqa: E402
+from upgates_client import UpgatesClient, UpgatesError  # noqa: E402
 from ai_search.search_engine import strip_html  # noqa: E402
 
 DATA_DIR = os.environ.get("AI_SEARCH_DATA_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -91,6 +91,7 @@ def normalize_product(p, lang, domain=""):
         "long_description": strip_html(d.get("long_description"))[:3000],
         "manufacturer": p.get("manufacturer") or "",
         "categories": [c["name"] for c in p.get("categories") or [] if c.get("name")],
+        "category_ids": [c["category_id"] for c in p.get("categories") or [] if c.get("category_id")],
         "variants": variant_labels,
         "price": price,
         "price_max": max(prices) if prices else price,
@@ -119,6 +120,31 @@ def _slim(pairs):
     return obj
 
 
+def _load_categories(client, lang_codes):
+    """Category / brand / info-page URLs per language. Needs the "Kategórie" read permission;
+    without it the search still works, the suggestions just are not clickable links."""
+    out = {code: {"categories": {}, "brands": {}, "pages": []} for code in lang_codes}
+    try:
+        cats = list(client.paginate("categories", object_pairs_hook=_slim))
+    except UpgatesError as e:
+        print(f"categories not loaded (missing API permission?): HTTP {e.status}", file=sys.stderr)
+        return out
+    for c in cats:
+        if not c.get("active_yn") or c.get("exclude_from_search_yn"):
+            continue
+        for d in c.get("descriptions") or []:
+            lang, name, url = d.get("language"), (d.get("name") or "").strip(), d.get("url")
+            if lang not in out or not name or not url:
+                continue
+            if c.get("manufacturer"):
+                out[lang]["brands"][c["manufacturer"]] = url
+            if c.get("type") == "siteWithProducts":
+                out[lang]["categories"][str(c["category_id"])] = {"name": name, "url": url}
+            elif c.get("type") in ("site", "contact", "article", "articles"):
+                out[lang]["pages"].append({"title": name, "url": url})
+    return out
+
+
 def build_catalog(client=None):
     """Stream products page by page so a 500 MB+ API response never sits in memory at once."""
     client = client or UpgatesClient()
@@ -127,6 +153,8 @@ def build_catalog(client=None):
         l["language_id"]: {"domain": l.get("domain"), "currency": l.get("currency_id"), "products": []}
         for l in langs
     }}
+    for code, extra in _load_categories(client, list(catalog["languages"])).items():
+        catalog["languages"][code].update(extra)
     for p in client.paginate("products", object_pairs_hook=_slim):
         for code, lang in catalog["languages"].items():
             doc = normalize_product(p, code, lang["domain"] or "")

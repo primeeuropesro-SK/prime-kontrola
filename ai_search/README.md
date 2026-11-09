@@ -23,6 +23,12 @@ e-shop (widget.js) ──▶ /api/search ─────────────
   `procerra`), i/y (`mykina`, `rukavyce`, `zymna`) a zlé písmeno (`rukavuce`). Krátke slová (do 3 znakov)
   musia sedieť presne, slová so 4–5 znakmi znesú 1 chybu, dlhšie 2. Widget ukáže
   „Zobrazujem výsledky pre: procera zimná bunda“.
+- **Našepkávač** (ako Luigi's Box): počas písania dokončuje hľadané výrazy z katalógu
+  („proc“ → „procera“, „procera z“ → „procera **zimná pracovná bunda**“, Tab výraz doplní), ponúka
+  kategórie, značky a informačné stránky (odkazy na e-shop) a vpravo produkty so zvýraznenou zhodou.
+  Po kliknutí do prázdneho poľa ukáže populárne vyhľadávania a obľúbené kategórie. Populárne sa
+  zobrazia až keď výraz hľadali aspoň 3 rôzni návštevníci a obsahuje iba slová z katalógu.
+  Odkazy na kategórie potrebujú v Upgates API právo **Kategórie → Iba čítanie**.
 - **Enter alebo tlačidlo „✨ Opýtať sa AI“** spustí AI vyhľadávanie: Claude premení voľný text na kľúčové slová
   v jazyku katalógu, vyberie kategórie, cenový rozsah a potom zoradí najlepších kandidátov.
 - Ak AI nie je dostupná (chýba kľúč, výpadok), vyhľadávanie funguje ďalej bez nej.
