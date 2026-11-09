@@ -20,14 +20,14 @@ jednotky dolárov). Ceny sa môžu meniť, overte ich na render.com/pricing a cl
 
 ## Krok 2 – API prístup do Upgates (5 min)
 
-1. Prihláste sa do administrácie `https://prime-work.admin.s35.upgates.com`.
-2. V ľavom menu kliknite **Doplnky** a nájdite doplnok **API** (prípadne cez vyhľadávanie medzi doplnkami).
-3. Ak doplnok nie je zapnutý, kliknite **Aktivovať**.
-4. V detaile doplnku API kliknite **+ Nové** (nový prístup).
-5. **Názov:** `AI vyhladavanie`. **Oprávnenia:** iba **čítanie** pre **Produkty** a **Jazyky**
+1. Otvorte v administrácii **Nastavenia → Export / Import → API**:
+   `https://prime-work.admin.s35.upgates.com/setup/export-import/api/`
+2. Existujúce prístupy nemeňte ani nemažte, môžu ich používať iné napojenia.
+3. Kliknite na pridanie nového prístupu (**+ Nový** / **Pridať**).
+4. **Názov:** `AI vyhladavanie`. **Oprávnenia:** iba **čítanie** pre **Produkty** a **Jazyky**
    (žiadny zápis, objednávky ani zákazníci).
-6. Kliknite **Uložiť**.
-7. Z riadku nového prístupu v tabuľke skopírujte **Login** (`UPGATES_LOGIN`) a **API kľúč**
+5. Kliknite **Uložiť**.
+6. Z riadku nového prístupu v tabuľke skopírujte **Login** (`UPGATES_LOGIN`) a **API kľúč**
    (`UPGATES_API_KEY`, najprv ho zobrazte). Skontrolujte, či **URL** je
    `https://prime-work.admin.s35.upgates.com/api/v2`.
 
