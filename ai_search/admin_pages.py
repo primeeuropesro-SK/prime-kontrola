@@ -141,7 +141,9 @@ def render_ai_page(answers, week, products, token, flt, domains=None):
     return "".join(parts)
 
 
-def render_rules_page(rules, products, token, langs):
+def render_rules_page(rules, products, token, langs, sources=None):
+    """sources: {lang: {"file": {customer: [phrases]}, "auto": [{"customer", "catalog"}]}}"""
+    sources = sources or {}
     back = f"/report/rules?token={token}"
     tq = f"token={_e(token)}"
 
@@ -152,6 +154,7 @@ def render_rules_page(rules, products, token, langs):
     def delete(rule_id):
         return _form(token, back, "Zmazať", action="delete", rule_id=rule_id)
 
+    langs = sorted(langs, key=lambda l: (l != "sk", l))  # Slovakia first
     lang_opts = "".join(f'<option value="{_e(l)}">{_e(COUNTRY.get(l, l))}</option>' for l in langs)
     parts = [f"""<!doctype html><html lang="sk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Pravidlá vyhľadávania</title><style>{CSS}</style></head><body><main>
@@ -183,6 +186,56 @@ def render_rules_page(rules, products, token, langs):
         parts.append(f'<form method="post" action="/admin/action" class="row">{_hidden(token, back, action=action)}'
                      f'<select name="lang">{lang_opts}</select><input type="text" name="q" placeholder="výraz, napr. zimné rukavice">'
                      f'<input type="text" name="code" placeholder="kód produktu" style="width:160px"><button>➕ Pridať</button></form>')
-    parts.append("<p class='sub' style='margin-top:24px'>Synonymá (slová, ktoré zákazníci používajú inak ako katalóg) sa upravujú "
-                 "v súbore ai_search/synonyms.json na GitHube.</p></main></body></html>")
+    parts.append(render_synonyms_section(rules, token, back, langs, sources, lang_opts))
+    parts.append("</main></body></html>")
+    return "".join(parts)
+
+
+def render_synonyms_section(rules, token, back, langs, sources, lang_opts):
+    """All synonyms with their source; the owner's own can be deleted, automatic ones switched off."""
+    parts = ['<h2 id="synonyma">Synonymá</h2><p class="sub">Slovo, ktoré píše zákazník → výraz, ktorý používa katalóg. '
+             'Platí v okamžitom vyhľadávaní aj v našepkávači, hneď po uložení.</p>']
+    parts.append(f'<form method="post" action="/admin/action" class="row">{_hidden(token, back + "#synonyma", action="synonym")}'
+                 f'<select name="lang">{lang_opts}</select>'
+                 f'<input type="text" name="customer" placeholder="zákazník píše, napr. kombinezón, kombineza" style="flex:1;min-width:200px">'
+                 f'<span>→</span><input type="text" name="catalog" placeholder="výraz v katalógu, napr. overal" style="width:200px">'
+                 f'<button>➕ Pridať synonymum</button></form>')
+    rows = []
+
+    def edit(lang, customer, catalog):
+        # Saving adds the owner's version of this word, which replaces the file / automatic one.
+        return (f'<form method="post" action="/admin/action" style="display:flex;gap:6px">'
+                f'{_hidden(token, back + "#synonyma", action="synonym", lang=lang, customer=customer)}'
+                f'<input type="text" name="catalog" value="{_e(catalog)}" style="flex:1;min-width:140px"><button>Uložiť</button></form>')
+
+    for lang in langs:
+        blocked = rules.blocked(lang)
+        country = _e(COUNTRY.get(lang, lang))
+        own = {fold(r["customer"]) for r in rules.list("synonyms", lang)}
+        for r in rules.list("synonyms", lang):
+            rows.append(f"<tr><td>{country}</td><td>{_e(r['customer'])}</td><td>{edit(lang, r['customer'], r['catalog'])}</td>"
+                        f"<td>vy</td><td>{_form(token, back + '#synonyma', 'Zmazať', action='delete', rule_id=r['id'])}</td></tr>")
+        src = sources.get(lang, {})
+        others = [(c, ", ".join(t), "súbor synonyms.json") for c, t in (src.get("file") or {}).items()]
+        file_keys = {fold(c) for c, _, _ in others}
+        others += [(it.get("customer", ""), it.get("catalog", ""), "AI automaticky") for it in src.get("auto") or []
+                   if fold(it.get("customer", "")) not in file_keys]
+        for c, catalog, origin in others:
+            if fold(c) in own:
+                continue  # the owner's version above replaces it
+            if fold(c) in blocked:
+                block = next((b for b in rules.list("blocked_synonyms", lang) if fold(b["customer"]) == fold(c)), None)
+                action = _form(token, back + "#synonyma", "Zapnúť", action="delete", rule_id=block["id"]) if block else ""
+                rows.append(f"<tr style='opacity:.5'><td>{country}</td><td><s>{_e(c)}</s></td><td><s>{_e(catalog)}</s></td>"
+                            f"<td>{origin} – vypnuté</td><td>{action}</td></tr>")
+            else:
+                rows.append(f"<tr><td>{country}</td><td>{_e(c)}</td><td>{edit(lang, c, catalog)}</td><td>{origin}</td>"
+                            f"<td>{_form(token, back + '#synonyma', 'Vypnúť', action='block_synonym', lang=lang, customer=c)}</td></tr>")
+    if rows:
+        parts.append("<table><tr><th>Krajina</th><th>Zákazník píše</th><th>Výraz v katalógu</th><th>Zdroj</th><th></th></tr>"
+                     + "".join(rows) + "</table>")
+    else:
+        parts.append('<p class="empty">Zatiaľ žiadne synonymá.</p>')
+    parts.append("<p class='sub'>Upraviť: zmeňte výraz v katalógu v riadku a kliknite <b>Uložiť</b>. "
+                 "Vypnúť: synonymum prestane platiť, kedykoľvek ho zapnete späť.</p>")
     return "".join(parts)

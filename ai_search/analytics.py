@@ -267,7 +267,36 @@ def _delta(cur, prev, key, unit=""):
     return f'<span class="d" style="color:{color}">{"+" if d > 0 else ""}{d}{unit}</span>'
 
 
-def render_html(report, domains=None, base_url="", token=""):
+def _synonym_table(lang, syn, token, report, base_url, known):
+    """'Máte, ale zákazníci to volajú inak': with a token every row can be saved as a synonym in one click."""
+    e = html.escape
+    head = "<h3 id='syn-" + e(lang) + "'>Máte, ale zákazníci to volajú inak – doplňte synonymum</h3>"
+    if not token:  # e-mail version: read only
+        return (head + "<table><tr><th>Zákazník hľadal</th><th>Hľadaní</th><th>Výraz v katalógu</th></tr>" + "".join(
+            f"<tr><td>{e(', '.join(d['queries'][:6]))}</td><td class='n'>{d['count']}</td><td>{e(d.get('catalog_phrase', ''))}</td></tr>"
+            for d in syn) + "</table><p class='sub'>Synonymá pridáte jedným klikom v reporte na webe.</p>")
+    back = f"{base_url}?week={report['week']}&token={token}#syn-{lang}"
+    rows = []
+    for d in syn:
+        queries = d["queries"][:6]
+        done = all(fold(q) in known for q in queries)
+        if done:
+            action = "<span style='color:#2f7d32'>✔ pridané</span>"
+        else:
+            action = (f"<form method='post' action='/admin/action' style='display:flex;gap:6px;flex-wrap:wrap'>"
+                      f"<input type='hidden' name='token' value='{e(token)}'><input type='hidden' name='back' value='{e(back)}'>"
+                      f"<input type='hidden' name='action' value='synonym'><input type='hidden' name='lang' value='{e(lang)}'>"
+                      f"<input name='customer' value='{e(', '.join(queries))}' style='flex:1;min-width:150px' title='čo píše zákazník (oddeľte čiarkou)'>"
+                      f"<span style='align-self:center'>→</span>"
+                      f"<input name='catalog' value='{e(d.get('catalog_phrase', ''))}' style='width:170px' title='výraz v katalógu'>"
+                      f"<button>➕ Pridať synonymum</button></form>")
+        rows.append(f"<tr><td class='n'>{d['count']}</td><td>{action if not done else e(', '.join(queries)) + ' → ' + e(d.get('catalog_phrase', '')) + ' ' + action}</td></tr>")
+    return (head + "<p class='sub'>Upravte text podľa potreby a kliknite <b>Pridať synonymum</b>. Platí hneď. "
+            f"Všetky synonymá nájdete v <a href='{e(base_url)}/rules?token={e(token)}#synonyma'>Pravidlách</a>.</p>"
+            "<table><tr><th>Hľadaní</th><th>Zákazník hľadal → výraz v katalógu</th></tr>" + "".join(rows) + "</table>")
+
+
+def render_html(report, domains=None, base_url="", token="", known_synonyms=None):
     e = html.escape
     domains = domains or {}
     parts = [f"""<!doctype html><html lang="sk"><head><meta charset="utf-8">
@@ -282,7 +311,9 @@ h3{{font-size:15px;margin:18px 0 8px}} .sub{{color:#666}} .nav a{{margin-right:1
 table{{width:100%;border-collapse:collapse;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.08)}}
 th,td{{text-align:left;padding:7px 10px;border-bottom:1px solid #eee;vertical-align:top}} th{{background:#fafafa;font-size:12px;color:#666}}
 td.n{{text-align:right;white-space:nowrap}} a{{color:#1f5fbf}} .cols{{display:grid;grid-template-columns:1fr 1fr;gap:14px}}
-@media(max-width:700px){{.cols{{grid-template-columns:1fr}}}} .empty{{color:#888;background:#fff;padding:10px;border-radius:10px}}
+@media(max-width:700px){{.cols{{grid-template-columns:1fr}}}}
+input{{font:inherit;font-size:13px;border:1px solid #ccc;border-radius:6px;padding:4px 8px}}
+button{{font:inherit;font-size:12px;border:1px solid #2f7d32;color:#2f7d32;background:#fff;border-radius:6px;padding:3px 10px;cursor:pointer}} .empty{{color:#888;background:#fff;padding:10px;border-radius:10px}}
 </style></head><body><main>
 <h1>Report vyhľadávania – týždeň {e(report['week'])}</h1>
 <div class="sub">{e(report['start'])} – {e(report['end'])} · porovnanie s predchádzajúcim týždňom</div>"""]
@@ -322,14 +353,7 @@ td.n{{text-align:right;white-space:nowrap}} a{{color:#1f5fbf}} .cols{{display:gr
             else:
                 parts.append("<p class='empty'>Tento týždeň zákazníci nehľadali nič, čo by v sortimente chýbalo.</p>")
             if syn:
-                parts.append("<h3>Máte, ale zákazníci to volajú inak – doplňte synonymum</h3>"
-                             "<table><tr><th>Zákazník hľadal</th><th>Hľadaní</th><th>Výraz v katalógu</th></tr>" + "".join(
-                                 f"<tr><td>{e(', '.join(d['queries'][:6]))}</td><td class='n'>{d['count']}</td>"
-                                 f"<td>{e(d.get('catalog_phrase', ''))}</td></tr>" for d in syn) + "</table>")
-                snippet = {lang: {q: [d["catalog_phrase"]] for d in syn if d.get("catalog_phrase") for q in d["queries"]}}
-                parts.append("<p class='sub'>Na skopírovanie do <code>ai_search/synonyms.json</code>:</p>"
-                             f"<pre style='background:#fff;padding:10px;border-radius:10px;overflow:auto'>"
-                             f"{e(json.dumps(snippet, ensure_ascii=False, indent=2))}</pre>")
+                parts.append(_synonym_table(lang, syn, token, report, base_url, (known_synonyms or {}).get(lang, set())))
 
         def table(title, head, rows):
             if not rows:

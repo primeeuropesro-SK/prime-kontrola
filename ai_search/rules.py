@@ -13,14 +13,14 @@ import uuid
 
 from ai_search.search_engine import fold, tokenize
 
-KINDS = ("instructions", "pins", "hides")
+KINDS = ("instructions", "pins", "hides", "synonyms", "blocked_synonyms")
 
 
 class Rules:
     def __init__(self, path):
         self.path = path
         self.lock = threading.Lock()
-        self.data = {"instructions": [], "pins": [], "hides": [], "ratings": {}}
+        self.data = {"instructions": [], "pins": [], "hides": [], "synonyms": [], "blocked_synonyms": [], "ratings": {}}
         try:
             with open(path, encoding="utf-8") as f:
                 self.data.update(json.load(f))
@@ -51,6 +51,32 @@ class Rules:
 
     def add_hide(self, lang, query, pid):
         return self._add("hides", {"lang": lang, "query": query.strip()[:100], "pid": int(pid)})
+
+    def add_synonyms(self, lang, customers, catalog):
+        """customers: "kombinezón, kombineza" (comma separated) -> each gets the catalogue phrase."""
+        catalog = " ".join((catalog or "").split())[:80]
+        added = []
+        for c in (customers or "").split(","):
+            c = " ".join(c.lower().split())[:60]
+            if c and catalog and fold(c) != fold(catalog):
+                with self.lock:  # replace an earlier owner synonym for the same word
+                    self.data["synonyms"] = [r for r in self.data["synonyms"]
+                                             if not (r["lang"] == lang and fold(r["customer"]) == fold(c))]
+                added.append(self._add("synonyms", {"lang": lang, "customer": c, "catalog": catalog}))
+        return added
+
+    def block_synonym(self, lang, customer):
+        return self._add("blocked_synonyms", {"lang": lang, "customer": customer.strip().lower()[:60]})
+
+    def synonym_map(self, lang):
+        """Owner synonyms {customer: [catalogue phrases]}."""
+        out = {}
+        for r in self.list("synonyms", lang):
+            out.setdefault(r["customer"], []).append(r["catalog"])
+        return out
+
+    def blocked(self, lang):
+        return {fold(r["customer"]) for r in self.list("blocked_synonyms", lang)}
 
     def remove(self, rule_id):
         with self.lock:
