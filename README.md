@@ -7,6 +7,8 @@ Nástroje na kontrolu e-shopu **prime-work** cez Upgates API v2.
 - `upgates_client.py` – jednoduchý klient (len štandardná knižnica Pythonu), metódy `get()` a `paginate()`.
 - `test_upgates_api.py` – smoke test, ktorý overí dostupnosť hlavných endpointov (iba GET).
 
+- `ai_search/` – **AI vyhľadávanie produktov** pre e-shop (server + widget do Upgates), pozri [ai_search/README.md](ai_search/README.md).
+
 ## Konfigurácia
 
 | Premenná | Popis |
