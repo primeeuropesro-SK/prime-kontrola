@@ -431,7 +431,9 @@ class Handler(BaseHTTPRequestHandler):
                         else analytics.not_found_csv(report))
                 return self._send(200, body.encode("utf-8"), "text/csv; charset=utf-8", cache="no-store")
             known = {lang: {fold(c) for c in STORE.synonyms_for(lang)} for lang in report["langs"]}
-            page = analytics.render_html(report, STORE.domains, "/report", token, known)
+            only = qs.get("lang", [None])[0]
+            page = analytics.render_html(report, STORE.domains, "/report", token, known,
+                                         only if only in report["langs"] else None)
             return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8", cache="no-store")
         if url.path == "/widget.js":
             return self._static("widget.js", "application/javascript; charset=utf-8")

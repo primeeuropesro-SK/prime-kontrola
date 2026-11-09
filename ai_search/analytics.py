@@ -25,6 +25,11 @@ from ai_search.search_engine import fold
 EVENT_TYPES = {"search", "ai", "suggestion", "all", "click"}
 RETENTION_DAYS = 400
 COUNTRY = {"sk": "Slovensko", "hu": "Maďarsko", "cs": "Česko"}
+FLAG = {"sk": "🇸🇰", "hu": "🇭🇺", "cs": "🇨🇿"}
+
+
+def country_label(lang):
+    return f"{FLAG.get(lang, '')} {COUNTRY.get(lang, lang.upper())}".strip()
 
 
 def now_local():
@@ -102,6 +107,7 @@ def group_searches(events):
                 searches.append(cur)
             if e["type"] == "click" and e.get("pid"):
                 cur["clicks"].append(e["pid"])
+                cur.setdefault("click_times", {})[e["pid"]] = max(cur.get("click_times", {}).get(e["pid"], 0), e["t"])
             if e["type"] == "ai":
                 cur["ai"] = True
     return searches
@@ -150,7 +156,8 @@ def summarize(searches, products=None, top=20):
             "ai_searches": len(ai),
             "ai_success_rate": _pct(sum(1 for s in ai if s["clicks"]), len(ai)),
             "top_products": [
-                {"id": pid, "clicks": n, "title": catalog.get(pid, (f"#{pid}", None))[0], "url": catalog.get(pid, (None, None))[1]}
+                {"id": pid, "clicks": n, "title": catalog.get(pid, (f"#{pid}", None))[0], "url": catalog.get(pid, (None, None))[1],
+                 "last": max((s.get("click_times", {}).get(pid, 0) for s in ss), default=0)}
                 for pid, n in clicks.most_common(top)
             ],
             "top_queries": [
@@ -270,10 +277,12 @@ def _delta(cur, prev, key, unit=""):
 def _synonym_table(lang, syn, token, report, base_url, known):
     """'Máte, ale zákazníci to volajú inak': with a token every row can be saved as a synonym in one click."""
     e = html.escape
-    head = "<h3 id='syn-" + e(lang) + "'>Máte, ale zákazníci to volajú inak – doplňte synonymum</h3>"
+    head = ("<h3 id='syn-" + e(lang) + "'>Máte, ale zákazníci to volajú inak – doplňte synonymum – "
+            + e(country_label(lang)) + "</h3>")
     if not token:  # e-mail version: read only
-        return (head + "<table><tr><th>Zákazník hľadal</th><th>Hľadaní</th><th>Výraz v katalógu</th></tr>" + "".join(
-            f"<tr><td>{e(', '.join(d['queries'][:6]))}</td><td class='n'>{d['count']}</td><td>{e(d.get('catalog_phrase', ''))}</td></tr>"
+        return (head + "<table><tr><th>Zákazník hľadal</th><th>Hľadaní</th><th>Výraz v katalógu</th><th>Naposledy</th></tr>" + "".join(
+            f"<tr><td>{e(', '.join(d['queries'][:6]))}</td><td class='n'>{d['count']}</td><td>{e(d.get('catalog_phrase', ''))}</td>"
+            f"<td class='n'>{e(fmt_time(d.get('last')))}</td></tr>"
             for d in syn) + "</table><p class='sub'>Synonymá pridáte jedným klikom v reporte na webe.</p>")
     back = f"{base_url}?week={report['week']}&token={token}#syn-{lang}"
     rows = []
@@ -290,16 +299,16 @@ def _synonym_table(lang, syn, token, report, base_url, known):
                       f"<span style='align-self:center'>→</span>"
                       f"<input name='catalog' value='{e(d.get('catalog_phrase', ''))}' style='width:170px' title='výraz v katalógu'>"
                       f"<button>➕ Pridať synonymum</button></form>")
-        rows.append(f"<tr><td class='n'>{d['count']}</td><td>{action if not done else e(', '.join(queries)) + ' → ' + e(d.get('catalog_phrase', '')) + ' ' + action}</td></tr>")
+        rows.append(f"<tr><td class='n'>{d['count']}</td><td class='n'>{e(fmt_time(d.get('last')))}</td><td>{action if not done else e(', '.join(queries)) + ' → ' + e(d.get('catalog_phrase', '')) + ' ' + action}</td></tr>")
     return (head + "<p class='sub'>Upravte text podľa potreby a kliknite <b>Pridať synonymum</b>. Platí hneď. "
             f"Všetky synonymá nájdete v <a href='{e(base_url)}/rules?token={e(token)}#synonyma'>Pravidlách</a>.</p>"
-            "<table><tr><th>Hľadaní</th><th>Zákazník hľadal → výraz v katalógu</th></tr>" + "".join(rows) + "</table>")
+            "<table><tr><th>Hľadaní</th><th>Naposledy</th><th>Zákazník hľadal → výraz v katalógu</th></tr>" + "".join(rows) + "</table>")
 
 
-def render_html(report, domains=None, base_url="", token="", known_synonyms=None):
+def render_html(report, domains=None, base_url="", token="", known_synonyms=None, only_lang=None):
     e = html.escape
     domains = domains or {}
-    parts = [f"""<!doctype html><html lang="sk"><head><meta charset="utf-8">
+    parts = [f"""<!doctype html><html lang="sk" translate="no"><head><meta charset="utf-8"><meta name="google" content="notranslate">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Report vyhľadávania {e(report['week'])}</title>
 <style>
 body{{font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:0;background:#f4f5f7;color:#222}}
@@ -314,6 +323,9 @@ td.n{{text-align:right;white-space:nowrap}} a{{color:#1f5fbf}} .cols{{display:gr
 @media(max-width:700px){{.cols{{grid-template-columns:1fr}}}}
 input{{font:inherit;font-size:13px;border:1px solid #ccc;border-radius:6px;padding:4px 8px}}
 button{{font:inherit;font-size:12px;border:1px solid #2f7d32;color:#2f7d32;background:#fff;border-radius:6px;padding:3px 10px;cursor:pointer}} .empty{{color:#888;background:#fff;padding:10px;border-radius:10px}}
+.tabs{{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 4px}}.tabs a{{padding:6px 14px;border-radius:999px;background:#fff;color:#222;
+text-decoration:none;box-shadow:0 1px 3px rgba(0,0,0,.08)}}.tabs a.on{{background:#222;color:#fff}}
+h2.country{{border-bottom:3px solid #f39200;padding-bottom:6px}}
 </style></head><body><main>
 <h1>Report vyhľadávania – týždeň {e(report['week'])}</h1>
 <div class="sub">{e(report['start'])} – {e(report['end'])} · porovnanie s predchádzajúcim týždňom</div>"""]
@@ -326,11 +338,22 @@ button{{font:inherit;font-size:12px;border:1px solid #2f7d32;color:#2f7d32;backg
                      f'<a href="{e(base_url)}/searches.csv?week={e(report["week"])}{q}">všetky vyhľadávania (CSV)</a></p>'
                      f'<p class="nav"><b><a href="{e(base_url)}/ai?week={e(report["week"])}&filter=unrated{q}">✨ AI odpovede – hodnotenie a opravy</a></b>'
                      f'<a href="{e(base_url)}/rules?{q[1:]}">pravidlá a pokyny pre AI</a></p>')
+    langs_all = sorted(report["langs"], key=lambda l: (l != "sk", l))  # Slovakia first
+    if base_url and len(langs_all) > 1:
+        q = f"&token={e(token)}" if token else ""
+        tabs = [f'<a class="{"on" if not only_lang else ""}" href="{e(base_url)}?week={e(report["week"])}{q}">Všetky krajiny</a>']
+        tabs += [f'<a class="{"on" if only_lang == l else ""}" href="{e(base_url)}?week={e(report["week"])}&lang={e(l)}{q}">'
+                 f'{e(country_label(l))}</a>' for l in langs_all]
+        parts.append('<div class="tabs">' + "".join(tabs) + "</div>")
     if not report["langs"]:
         parts.append('<p class="empty">V tomto týždni nie sú zaznamenané žiadne vyhľadávania.</p>')
-    for lang, r in report["langs"].items():
+    for lang in langs_all:
+        r = report["langs"][lang]
+        if only_lang and lang != only_lang:
+            continue
+        cl = country_label(lang)
         p = report["prev"].get(lang)
-        parts.append(f"<h2>{e(COUNTRY.get(lang, lang.upper()))} <span class='sub'>{e(domains.get(lang, ''))}</span></h2>")
+        parts.append(f"<h2 class='country'>{e(cl)} <span class='sub'>{e(domains.get(lang, ''))}</span></h2>")
         parts.append('<div class="kpis">'
                      f'<div class="kpi"><b>{r["searches"]}{_delta(r, p, "searches")}</b><span>vyhľadávaní</span></div>'
                      f'<div class="kpi"><b>{r["success_rate"]} %{_delta(r, p, "success_rate", " b.")}</b><span>úspešnosť (klik na produkt)</span></div>'
@@ -343,7 +366,7 @@ button{{font:inherit;font-size:12px;border:1px solid #2f7d32;color:#2f7d32;backg
         if demand:
             missing = [d for d in demand if d["status"] == "missing"]
             syn = [d for d in demand if d["status"] == "synonym"]
-            parts.append("<h3>Čo zákazníci hľadajú a nemáte</h3>")
+            parts.append(f"<h3>Čo zákazníci hľadajú a nemáte – {e(cl)}</h3>")
             if missing:
                 parts.append("<table><tr><th>Produkt</th><th>Hľadaní</th><th>Naposledy</th><th>Ako hľadali</th><th>Poznámka</th></tr>" + "".join(
                     f"<tr><td><b>{e(d['product'])}</b></td><td class='n'>{d['count']}</td>"
@@ -363,23 +386,24 @@ button{{font:inherit;font-size:12px;border:1px solid #2f7d32;color:#2f7d32;backg
 
         prod_rows = [[f'<td class="n">{i}.</td>',
                       f'<td>{f"<a href={chr(34)}{e(x["url"])}{chr(34)}>{e(x["title"])}</a>" if x["url"] else e(x["title"])}</td>',
-                      f'<td class="n">{x["clicks"]}</td>'] for i, x in enumerate(r["top_products"], 1)]
-        parts.append(table("Top 20 produktov z vyhľadávania", ["#", "Produkt", "Kliknutia"], prod_rows))
+                      f'<td class="n">{x["clicks"]}</td>',
+                      f'<td class="n">{e(fmt_time(x.get("last")))}</td>'] for i, x in enumerate(r["top_products"], 1)]
+        parts.append(table(f"Top 20 produktov z vyhľadávania – {cl}", ["#", "Produkt", "Kliknutia", "Naposledy kliknuté"], prod_rows))
         parts.append('<div class="cols"><div>')
-        parts.append(table("Hľadali a nenašli", ["Výraz", "Počet", "Naposledy hľadané"],
+        parts.append(table(f"Hľadali a nenašli – {cl}", ["Výraz", "Počet", "Naposledy hľadané"],
                            [[f"<td>{e(x['q'])}</td>", f'<td class="n">{x["count"]}</td>',
                              f'<td class="n">{e(fmt_time(x.get("last")))}</td>'] for x in r["not_found"]]))
         parts.append("</div><div>")
-        parts.append(table("Našli, ale neklikli", ["Výraz", "Počet", "Naposledy hľadané"],
+        parts.append(table(f"Našli, ale neklikli – {cl}", ["Výraz", "Počet", "Naposledy hľadané"],
                            [[f"<td>{e(x['q'])}</td>", f'<td class="n">{x["count"]}</td>',
                              f'<td class="n">{e(fmt_time(x.get("last")))}</td>'] for x in r["no_click_queries"]]))
         parts.append("</div></div>")
-        parts.append(table("Top 20 hľadaných výrazov", ["Výraz", "Počet", "Úspešnosť", "Naposledy hľadané"],
+        parts.append(table(f"Top 20 hľadaných výrazov – {cl}", ["Výraz", "Počet", "Úspešnosť", "Naposledy hľadané"],
                            [[f"<td>{e(x['q'])}</td>", f'<td class="n">{x["count"]}</td>', f'<td class="n">{x["success_rate"]} %</td>',
                              f'<td class="n">{e(fmt_time(x.get("last")))}</td>'] for x in r["top_queries"]]))
     parts.append('<p class="sub" style="margin-top:28px">Úspešnosť = podiel vyhľadávaní, po ktorých zákazník klikol na produkt. '
                  '„Hľadali a nenašli“ = v e-shope nie je produkt, ktorý by obsahoval všetky hľadané slová '
-                 '(preklepy a synonymá sa zohľadňujú). Tip: takéto výrazy doplňte do ai_search/synonyms.json, '
+                 '(preklepy a synonymá sa zohľadňujú). Tip: pre takéto výrazy pridajte synonymum (v Pravidlách), doplňte ich '
                  'do názvov či popisov produktov, alebo zvážte rozšírenie sortimentu.</p>'
                  "</main></body></html>")
     return "".join(parts)
