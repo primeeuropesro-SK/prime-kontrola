@@ -89,7 +89,7 @@ def render_ai_page(answers, week, products, token, flt, domains=None):
     labels = {"all": "Všetky", "unrated": "Nehodnotené", "bad": "Zlé (👎)", "noclick": "Bez kliku"}
     tabs = "".join(f'<a class="{"on" if k == flt else ""}" href="/report/ai?week={wk}&filter={k}{tq}">{v} ({counts[k]})</a>'
                    for k, v in labels.items())
-    parts = [f"""<!doctype html><html lang="sk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    parts = [f"""<!doctype html><html lang="sk" translate="no"><head><meta charset="utf-8"><meta name="google" content="notranslate"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AI odpovede {wk}</title><style>{CSS}</style></head><body><main>
 <h1>AI odpovede – týždeň {wk}</h1><div class="sub">{start:%d.%m.%Y} – {end:%d.%m.%Y}</div>
 <p class="nav"><a href="/report?week={wk}{tq}">← report</a><a href="/report/ai?week={analytics.iso_week(start - timedelta(days=7))}&filter={flt}{tq}">predchádzajúci týždeň</a>
@@ -156,7 +156,7 @@ def render_rules_page(rules, products, token, langs, sources=None):
 
     langs = sorted(langs, key=lambda l: (l != "sk", l))  # Slovakia first
     lang_opts = "".join(f'<option value="{_e(l)}">{_e(COUNTRY.get(l, l))}</option>' for l in langs)
-    parts = [f"""<!doctype html><html lang="sk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    parts = [f"""<!doctype html><html lang="sk" translate="no"><head><meta charset="utf-8"><meta name="google" content="notranslate"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Pravidlá vyhľadávania</title><style>{CSS}</style></head><body><main>
 <h1>Pravidlá a pokyny pre AI</h1><div class="sub">Opravy, ktoré platia pre vyhľadávanie na e-shope. Prejavia sa okamžite.</div>
 <p class="nav"><a href="/report?{tq}">← report</a><a href="/report/ai?{tq}&filter=unrated">AI odpovede</a></p>
