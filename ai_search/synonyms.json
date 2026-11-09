@@ -1,0 +1,24 @@
+{
+  "_navod": "Vlastné synonymá: \"čo píše zákazník\": [\"výraz z katalógu\", ...]. Po úprave na GitHube sa prejavia po najbližšom nasadení. Majú prednosť pred automaticky vytvorenými.",
+  "sk": {
+    "kombinezón": ["overal"],
+    "kombinéza": ["overal"],
+    "lacláče": ["nohavice na traky"],
+    "farmárky": ["nohavice na traky"],
+    "slúchadlá": ["chránič sluchu"],
+    "mušle na uši": ["chránič sluchu"],
+    "sveter": ["mikina"],
+    "pracovky": ["pracovná obuv"],
+    "gumáky": ["čižmy"],
+    "reflexka": ["reflexná vesta"],
+    "polokošeľa": ["polo"],
+    "chrániče kolien": ["nákolenník"]
+  },
+  "hu": {
+    "fejhallgató": ["hallásvédő"],
+    "füldugó": ["hallásvédő"],
+    "gumicsizma": ["gumicsizma"],
+    "térdpárna": ["térdvédő"],
+    "munkásruha": ["munkavédelmi ruha"]
+  }
+}

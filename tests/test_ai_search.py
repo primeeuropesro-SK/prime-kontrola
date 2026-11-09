@@ -173,6 +173,155 @@ class PopularTests(unittest.TestCase):
         self.assertEqual(pop.top("sk"), ["reflexná vesta"])
 
 
+class SynonymTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        raw = RAW + [
+            product(10, "Multi Master Red - Overal na traky", ["Overaly"], 49.0),
+            product(11, "EM5002B - Mušlový chránič sluchu", ["Chrániče sluchu"], 10.3),
+            product(12, "Kariban 466 - Pracovná mikina", ["Mikiny"], 25.0, short="otvor na slúchadlá"),
+        ]
+        cls.idx = SearchIndex([d for d in (normalize_product(p, "sk") for p in raw) if d])
+        cls.idx.set_synonyms({"kombinezón": ["overal"], "slúchadlá": ["chránič sluchu"], "sveter": ["mikina"]})
+
+    def first(self, q):
+        _, res = self.idx.search(q)
+        return res[0]["id"] if res else None
+
+    def test_word_missing_in_catalogue(self):
+        self.assertEqual(self.first("kombinezón"), 10)
+        self.assertEqual(self.first("kombinezonu"), 10)  # inflected, no diacritics
+
+    def test_synonym_beats_incidental_mention(self):
+        self.assertEqual(self.first("slúchadlá"), 11)  # not the hoodie that mentions headphones
+
+    def test_synonym_offered_as_suggestion(self):
+        self.assertEqual(self.idx.suggest_queries("kombinezón")[0], "overal")
+
+    def test_no_false_trigger(self):
+        self.assertEqual(self.idx.synonym_hits("svetlo")[1], [])
+
+    def test_manual_file_overrides_auto(self):
+        import tempfile
+        from ai_search import synonyms
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "synonyms_sk.json"), "w", encoding="utf-8") as f:
+            json.dump({"items": [{"customer": "sveter", "catalog": "tričko"}, {"customer": "gumáky", "catalog": "čižmy"}]}, f)
+        manual = os.path.join(d, "manual.json")
+        with open(manual, "w", encoding="utf-8") as f:
+            json.dump({"sk": {"sveter": ["mikina"]}}, f)
+        orig = synonyms.MANUAL_PATH
+        synonyms.MANUAL_PATH = manual
+        try:
+            m = synonyms.merged(d, "sk")
+        finally:
+            synonyms.MANUAL_PATH = orig
+        self.assertEqual(m, {"sveter": ["mikina"], "gumáky": ["čižmy"]})
+
+    def test_auto_generation_is_cached(self):
+        import tempfile
+        from ai_search import synonyms
+
+        class FakeAI:
+            enabled, calls = True, 0
+
+            def synonyms(self, lang, phrases):
+                FakeAI.calls += 1
+                return [{"customer": "kombinezón", "catalog": phrases[0]}]
+
+        d = tempfile.mkdtemp()
+        self.assertTrue(synonyms.ensure_auto(d, "sk", self.idx, FakeAI()))
+        self.assertFalse(synonyms.ensure_auto(d, "sk", self.idx, FakeAI()))  # unchanged catalogue -> no new call
+        self.assertEqual(FakeAI.calls, 1)
+
+
+class AnalyticsTests(unittest.TestCase):
+    def events(self):
+        e = lambda t, typ, q, n=5, sid="a", pid=None, lang="sk": dict(t=t, type=typ, q=q, n=n, sid=sid, lang=lang, **({"pid": pid} if pid else {}))
+        return [
+            e(0, "search", "proc"), e(2, "search", "procera"), e(3, "suggestion", "procera zimná bunda"),
+            e(5, "click", "procera zimná bunda", pid=7),                       # 1 successful search
+            e(60, "search", "kombinezon", n=0),                                 # 1 not found
+            e(0, "search", "kombinezon", n=0, sid="b"),                         # same word, other visitor
+            e(9, "ai", "topánky so špicou do 40 €", sid="b"), e(12, "click", "topánky so špicou do 40 €", sid="b", pid=8),
+            e(20, "search", "vesta", sid="c"),                                  # results, no click
+            e(1, "search", "kesztyű", lang="hu", sid="d"), e(4, "click", "kesztyű", lang="hu", sid="d", pid=7),
+        ]
+
+    def test_grouping_and_summary(self):
+        from ai_search import analytics
+        searches = analytics.group_searches(self.events())
+        rep = analytics.summarize(searches, {"sk": {7: ("Procera Silus", "https://shop/p/7")}})
+        sk = rep["sk"]
+        self.assertEqual(sk["searches"], 5)  # proc→procera→suggestion→click is one search
+        self.assertEqual(sk["successful"], 2)
+        self.assertEqual(sk["success_rate"], 40.0)
+        self.assertEqual([(x["q"], x["count"], x["first"], x["last"]) for x in sk["not_found"]], [("kombinezon", 2, 0, 60)])
+        self.assertEqual([x["t"] for x in sk["not_found_events"]], [60, 0])  # each search with its time, newest first
+        self.assertEqual(sk["no_click_queries"][0]["q"], "vesta")
+        self.assertEqual((sk["ai_searches"], sk["ai_success_rate"]), (1, 100.0))
+        self.assertEqual(sk["top_products"][0]["title"], "Procera Silus")
+        self.assertEqual(rep["hu"]["searches"], 1)
+
+    def test_report_files_and_html(self):
+        import tempfile
+        from datetime import timedelta
+        from ai_search import analytics
+        log = analytics.EventLog(tempfile.mkdtemp())
+        for ev in self.events():
+            log.append(ev)
+        today = analytics.now_local().date()
+        week = analytics.iso_week(today)
+        rep = analytics.build_report(log, {}, week)
+        self.assertGreater(rep["langs"]["sk"]["searches"], 0)
+        page = analytics.render_html(rep, {"sk": "https://www.primework.sk"})
+        self.assertIn("Top 20 produktov", page)
+        csv_text = analytics.not_found_csv(rep)
+        self.assertIn("kombinezon", csv_text)
+        self.assertRegex(csv_text, r"Slovensko;\d\d\.\d\d\.\d{4};\d\d:\d\d;kombinezon")
+        self.assertIn("Naposledy hľadané", page)
+        self.assertEqual(analytics.week_range(week)[0], today - timedelta(days=today.weekday()))
+
+
+class DemandTests(unittest.TestCase):
+    def test_groups_missing_products_and_caches(self):
+        import tempfile
+        from ai_search import analytics
+
+        class FakeAI:
+            enabled, calls = True, 0
+
+            def product_demand(self, lang, queries, phrases):
+                FakeAI.calls += 1
+                return [
+                    {"product": "Zváračská kukla", "queries": ["zvaracska kukla", "kukla na zvaranie"], "status": "missing",
+                     "catalog_phrase": "", "note": "Samostmievacia kukla, norma EN 175."},
+                    {"product": "Overal", "queries": ["kombinezon"], "status": "synonym", "catalog_phrase": "overal", "note": ""},
+                    {"product": "?", "queries": ["xyzzy"], "status": "unclear", "catalog_phrase": "", "note": ""},
+                ]
+
+        report = {"week": "2026-W46", "langs": {"sk": {
+            "not_found": [{"q": "zvaracska kukla", "count": 3}, {"q": "kukla na zvaranie", "count": 2},
+                          {"q": "kombinezon", "count": 4}, {"q": "xyzzy", "count": 1}],
+            "no_click_queries": []}}, "prev": {}}
+        d = tempfile.mkdtemp()
+        analytics.add_demand(report, FakeAI(), d, {"sk": ["overal"]})
+        dem = report["langs"]["sk"]["demand"]
+        self.assertEqual((dem[0]["product"], dem[0]["count"], dem[0]["status"]), ("Zváračská kukla", 5, "missing"))
+        self.assertEqual(dem[1]["status"], "synonym")
+        analytics.add_demand(report, FakeAI(), d, {"sk": ["overal"]})  # same data -> cached, no new AI call
+        self.assertEqual(FakeAI.calls, 1)
+        csv_text = analytics.demand_csv(report)
+        self.assertIn("Zváračská kukla;chýba v sortimente;5;", csv_text)
+
+    def test_without_ai_report_still_works(self):
+        import tempfile
+        from ai_search import analytics
+        report = {"week": "2026-W46", "langs": {"sk": {"not_found": [{"q": "kukla", "count": 1}], "no_click_queries": []}}, "prev": {}}
+        analytics.add_demand(report, None, tempfile.mkdtemp(), {})
+        self.assertEqual(report["langs"]["sk"]["demand"], [])
+
+
 class AITests(unittest.TestCase):
     def test_understand_and_rerank(self):
         docs = [d for d in (normalize_product(p, "sk") for p in RAW) if d]

@@ -10,6 +10,7 @@ Endpoints
   POST /admin/sync   (header X-Admin-Token)     reload products from Upgates now
 """
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -22,7 +23,7 @@ from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ai_search import sync  # noqa: E402
+from ai_search import analytics, mailer, sync, synonyms  # noqa: E402
 from ai_search.ai import QueryAI  # noqa: E402
 from ai_search.search_engine import SearchIndex, tokenize  # noqa: E402
 
@@ -37,6 +38,7 @@ ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
 SYNC_INTERVAL_MIN = int(os.environ.get("SYNC_INTERVAL_MIN", "60"))
 AI_RATE_PER_MIN = int(os.environ.get("AI_RATE_PER_MIN", "20"))  # per IP, protects API costs
 POPULAR_MIN_USERS = int(os.environ.get("POPULAR_MIN_USERS", "3"))
+TRACK_RATE_PER_MIN = int(os.environ.get("TRACK_RATE_PER_MIN", "120"))
 PUBLIC_FIELDS = ("id", "code", "title", "url", "image", "price", "price_max", "currency",
                  "in_stock", "availability", "manufacturer", "categories")
 
@@ -46,6 +48,7 @@ class Store:
 
     def __init__(self):
         self.indexes, self.meta, self.lock = {}, {}, threading.Lock()
+        self.domains = {}
         self.ai = QueryAI()
 
     def load(self, catalog):
@@ -54,12 +57,46 @@ class Store:
             self.indexes = indexes
             self.meta = {"generated_at": catalog.get("generated_at"),
                          "products": {k: len(v.docs) for k, v in indexes.items()}}
+        self.domains = {k: v.get("domain") for k, v in catalog["languages"].items()}
         log.info("catalog loaded: %s", self.meta["products"])
+        self.apply_synonyms()
+
+    def apply_synonyms(self):
+        with self.lock:
+            indexes = dict(self.indexes)
+        for lang, idx in indexes.items():
+            idx.set_synonyms(synonyms.merged(sync.DATA_DIR, lang))
+
+    def refresh_synonyms(self):
+        """Create / refresh the automatic synonym lists (one cheap AI call per language)."""
+        with self.lock:
+            indexes = dict(self.indexes)
+        changed = False
+        for lang, idx in indexes.items():
+            try:
+                changed |= synonyms.ensure_auto(sync.DATA_DIR, lang, idx, self.ai)
+            except Exception as e:
+                log.warning("synonyms for %s failed: %s", lang, e)
+        if changed:
+            self.apply_synonyms()
+
+    def phrases_by_lang(self):
+        with self.lock:
+            return {lang: [ph for ph, _ in idx.phrases] for lang, idx in self.indexes.items()}
+
+    def report(self, week=None):
+        report = analytics.build_report(EVENTS, self.products_by_id(), week)
+        return analytics.add_demand(report, self.ai, os.path.join(sync.DATA_DIR, "demand"), self.phrases_by_lang())
+
+    def products_by_id(self):
+        with self.lock:
+            return {lang: {d["id"]: (d["title"], d.get("url")) for d in idx.docs} for lang, idx in self.indexes.items()}
 
     def sync_now(self):
         catalog = sync.build_catalog()
         sync.save_catalog(catalog)
         self.load(catalog)
+        self.refresh_synonyms()
 
     def index(self, lang):
         with self.lock:
@@ -166,6 +203,24 @@ class Popular:
 
 STORE = Store()
 POPULAR = Popular(os.path.join(sync.DATA_DIR, "popular.json"))
+EVENTS = analytics.EventLog(os.path.join(sync.DATA_DIR, "events"))
+_track_rate = defaultdict(deque)
+
+
+def _track_allowed(ip):
+    now = time.time()
+    with _rate_lock:
+        q = _track_rate[ip]
+        while q and now - q[0] > 60:
+            q.popleft()
+        if len(q) >= TRACK_RATE_PER_MIN:
+            return False
+        q.append(now)
+        return True
+
+
+def _token_ok(token):
+    return bool(ADMIN_TOKEN) and hmac.compare_digest((token or "").encode(), ADMIN_TOKEN.encode())
 _rate = defaultdict(deque)
 _rate_lock = threading.Lock()
 
@@ -249,14 +304,46 @@ class Handler(BaseHTTPRequestHandler):
                 result["ai_rate_limited"] = True
             return self._send(200 if "error" not in result else 503, result, cache="no-store")
         if url.path == "/api/track":
-            # The widget reports a finished search (Enter, suggestion or product click).
+            # The widget reports what customers search and click (for statistics and popular searches).
             qs = parse_qs(url.query)
-            lang = qs.get("lang", ["sk"])[0]
-            POPULAR.record(lang, (qs.get("q", [""])[0] or "")[:100], self._client_ip(), STORE.index(lang))
+            lang = qs.get("lang", ["sk"])[0][:5]
+            q = (qs.get("q", [""])[0] or "").strip()[:100]
+            kind = qs.get("type", ["enter"])[0]
+            kind = kind if kind in analytics.EVENT_TYPES else "all"
+            ip = self._client_ip()
+            idx = STORE.index(lang)
+            if q and idx is not None and _track_allowed(ip):
+                event = {"type": kind, "lang": lang, "q": q, "sid": (qs.get("sid", [""])[0] or "")[:16],
+                         "n": idx.strict_count(q)}
+                try:
+                    pid = int(qs.get("pid", [""])[0])
+                    event["pid"] = pid
+                except ValueError:
+                    pass
+                try:
+                    EVENTS.append(event)
+                except OSError as e:
+                    log.warning("cannot write event: %s", e)
+                if kind != "search":
+                    POPULAR.record(lang, q, ip, idx)
             self.send_response(204)
             self._cors()
             self.end_headers()
             return
+        if url.path in ("/report", "/report/not-found.csv", "/report/demand.csv"):
+            qs = parse_qs(url.query)
+            token = qs.get("token", [""])[0]
+            if not _token_ok(token):
+                return self._send(403, b"<h1>403</h1><p>Chyba alebo chybny token.</p>", "text/html; charset=utf-8")
+            try:
+                report = STORE.report(qs.get("week", [None])[0])
+            except ValueError:
+                return self._send(400, {"error": "week must look like 2026-W45"})
+            if url.path.endswith(".csv"):
+                body = analytics.demand_csv(report) if "demand" in url.path else analytics.not_found_csv(report)
+                return self._send(200, body.encode("utf-8"), "text/csv; charset=utf-8", cache="no-store")
+            page = analytics.render_html(report, STORE.domains, "/report", token)
+            return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8", cache="no-store")
         if url.path == "/widget.js":
             return self._static("widget.js", "application/javascript; charset=utf-8")
         if url.path in ("/", "/demo"):
@@ -286,6 +373,31 @@ def _sync_loop():
             log.warning("periodic sync failed: %s", e)
 
 
+def _weekly_loop():
+    """Every Monday morning: e-mail last week's report (when SMTP is configured) and clean old events."""
+    state_path = os.path.join(sync.DATA_DIR, "report_state.json")
+    while True:
+        try:
+            now = analytics.now_local()
+            if now.weekday() == 0 and now.hour >= mailer.SEND_HOUR:
+                try:
+                    with open(state_path, encoding="utf-8") as f:
+                        state = json.load(f)
+                except (FileNotFoundError, ValueError):
+                    state = {}
+                report = STORE.report()
+                if state.get("sent_week") != report["week"]:
+                    if mailer.configured():
+                        mailer.send(f"Report vyhľadávania {report['week']}", analytics.render_html(report, STORE.domains))
+                        log.info("weekly report %s e-mailed", report["week"])
+                    EVENTS.cleanup()
+                    with open(state_path, "w", encoding="utf-8") as f:
+                        json.dump({"sent_week": report["week"]}, f)
+        except Exception as e:
+            log.warning("weekly report failed: %s", e)
+        time.sleep(900)
+
+
 def _initial_sync():
     try:
         STORE.sync_now()
@@ -297,12 +409,14 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
         STORE.load(sync.load_catalog())
+        threading.Thread(target=STORE.refresh_synonyms, daemon=True).start()
     except FileNotFoundError:
         # Start listening right away (hosting health checks), load products in the background.
         log.info("no cached catalog, syncing from Upgates in the background (takes a few minutes)...")
         threading.Thread(target=_initial_sync, daemon=True).start()
     if SYNC_INTERVAL_MIN > 0:
         threading.Thread(target=_sync_loop, daemon=True).start()
+    threading.Thread(target=_weekly_loop, daemon=True).start()
     log.info("AI %s (model %s)", "enabled" if STORE.ai.enabled else "DISABLED - set ANTHROPIC_API_KEY",
              os.environ.get("AI_MODEL", "claude-haiku-5-5"))
     log.info("listening on :%d", PORT)

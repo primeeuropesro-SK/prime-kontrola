@@ -121,10 +121,14 @@
       return isTyped ? esc(w) : "<b>" + esc(w) + "</b>";
     }).join(" ");
   }
-  function track(q) {
-    if (!q) return;
-    try { fetch(API + "/api/track?lang=" + encodeURIComponent(LANG) + "&q=" + encodeURIComponent(q), { keepalive: true, credentials: "omit" }); }
-    catch (e) { /* ignore */ }
+  // Random id of this page view - only to tell one search from the next in the statistics.
+  var SID = Math.random().toString(36).slice(2, 12);
+  function track(type, q, pid) {
+    q = (q || "").trim();
+    if (q.length < 2) return;
+    var url = API + "/api/track?lang=" + encodeURIComponent(LANG) + "&type=" + type + "&sid=" + SID +
+      "&q=" + encodeURIComponent(q) + (pid ? "&pid=" + encodeURIComponent(pid) : "");
+    try { fetch(url, { keepalive: true, credentials: "omit" }); } catch (e) { /* ignore */ }
   }
 
   // ------------------------------------------------------------------ rendering
@@ -136,7 +140,7 @@
   function chip(name, url, query) { return '<a class="pas-chip pas-nav" ' + target(name, url) + ">" + highlight(name, query) + "</a>"; }
   function productHtml(p, query) {
     var price = (p.price_max && p.price_max > p.price ? t.from : "") + money(p.price, p.currency);
-    return '<a class="pas-item pas-nav" role="option" href="' + esc(p.url) + '" data-pas-track>' +
+    return '<a class="pas-item pas-nav" role="option" href="' + esc(p.url) + '" data-pas-pid="' + esc(p.id) + '">' +
       (p.image ? '<img loading="lazy" alt="" src="' + esc(p.image) + '">' : "") +
       '<div style="min-width:0"><div class="pas-t">' + highlight(p.title, query) + "</div>" +
       (p.reason ? '<div class="pas-r">✔ ' + esc(p.reason) + "</div>" : "") +
@@ -223,7 +227,7 @@
   /* Binds one text field to one results box. Used for the desktop panel (field = the shop's
    * own input) and for the phone full-screen search (field = the overlay's input). */
   function controller(field, box, o) {
-    var seq = 0, active = -1, lastQuery = null, lastData = null;
+    var seq = 0, active = -1, lastQuery = null, lastData = null, idle = null;
 
     function setActive(i, items) {
       active = i;
@@ -241,19 +245,22 @@
         if (my !== seq) return; // a newer query is already running
         lastData = data;
         show(q ? renderResults(data, ai, o.compact, !!o.form()) : renderEmpty(data, o.compact));
+        // A query the customer stopped typing at counts as a search in the statistics.
+        clearTimeout(idle);
+        if (q && !ai) idle = setTimeout(function () { if (field.value === q) track("search", q); }, 1500);
         if (ai && o.compact) field.blur(); // hide the phone keyboard so the AI answer is visible
       }).catch(function () { if (my === seq && ai) o.hide(); });
     }
     function applyQuery(q) {
       field.value = q;
       lastQuery = q;
-      track(q.trim());
+      track("suggestion", q);
       search(q, false);
       field.focus();
     }
     function submitAll() {
       var q = field.value.trim();
-      track(q);
+      track("all", q);
       o.submit(q);
     }
 
@@ -280,17 +287,17 @@
       } else if (e.key === "Enter") {
         if (active >= 0 && items[active]) { e.preventDefault(); items[active].click(); return; }
         var q = field.value.trim();
-        if (ENTER_MODE === "ai" && q.length >= 3) { e.preventDefault(); track(q); search(q, true); }
+        if (ENTER_MODE === "ai" && q.length >= 3) { e.preventDefault(); track("ai", q); search(q, true); }
         else if (o.compact && q) { e.preventDefault(); submitAll(); }
       } else if (e.key === "Escape") { o.close(); }
     });
     box.addEventListener("mousedown", function (e) { if (!o.compact) e.preventDefault(); }); // keep focus in the input
     box.addEventListener("click", function (e) {
       var el;
-      if ((el = e.target.closest("[data-pas-ai]"))) { e.preventDefault(); track(field.value.trim()); search(field.value.trim(), true); if (!o.compact) field.focus(); return; }
+      if ((el = e.target.closest("[data-pas-ai]"))) { e.preventDefault(); track("ai", field.value); search(field.value.trim(), true); if (!o.compact) field.focus(); return; }
       if ((el = e.target.closest("[data-pas-q]"))) { e.preventDefault(); applyQuery(el.getAttribute("data-pas-q")); if (o.compact) field.blur(); return; }
       if ((el = e.target.closest("[data-pas-all]"))) { e.preventDefault(); submitAll(); return; }
-      if (e.target.closest("[data-pas-track]")) { track(field.value.trim()); }
+      if ((el = e.target.closest("[data-pas-pid]"))) { track("click", field.value, el.getAttribute("data-pas-pid")); }
     });
 
     return {

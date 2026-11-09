@@ -81,9 +81,9 @@ def edit_distance(a, b, limit=3):
 
 
 def max_typos(token):
-    """How many typos we tolerate: none for short words, 1 for 4-5 letters, 2 for longer."""
+    """How many typos we tolerate: none for short words, 1 for 4-6 letters, 2 for longer."""
     n = len(token)
-    return 0 if n <= 3 or token.isdigit() else 1 if n <= 5 else 2
+    return 0 if n <= 3 or token.isdigit() else 1 if n <= 6 else 2
 
 
 def _deletes(word, depth):
@@ -200,6 +200,7 @@ class SearchIndex:
                     self.brand_urls[m] = url
         self.pages = extras.get("pages") or []
         self._build_phrases()
+        self.synonyms = []  # [(customer tokens, [catalogue phrases])]
 
     @staticmethod
     def _prefix_range(sorted_list, prefix, cap=60):
@@ -232,7 +233,13 @@ class SearchIndex:
                     continue
                 ct = canon(term)
                 # Compare with the whole word and with its beginning (unfinished word / inflection).
-                d = min(edit_distance(cq, ct), edit_distance(cq, ct[: len(cq)]))
+                d = edit_distance(cq, ct)
+                if d > maxd:
+                    # Beginning of a longer word: an unfinished word (exact start) or an inflected
+                    # form with a short ending (rukavice ~ rukaviciach), not prilba ~ priľnavosť.
+                    dp = edit_distance(cq, ct[: len(cq)])
+                    if dp == 0 or (dp <= maxd and len(ct) <= len(cq) + 3):
+                        d = dp
                 if d <= maxd:
                     # Same word after spelling normalisation (mykina = mikina) ranks above other forms.
                     out[term] = 0.9 if ct == cq else TYPO_WEIGHT[d]
@@ -262,8 +269,9 @@ class SearchIndex:
     def corrections(self, query):
         """{typed word: catalogue word} for words that were not found as typed."""
         out = {}
+        syn_used, _ = self.synonym_hits(query)
         for tok in tokenize(query):
-            if tok in self.postings or tok.isdigit():
+            if tok in self.postings or tok.isdigit() or tok in syn_used:
                 continue
             matches = self._expand(tok)
             if not matches:
@@ -273,12 +281,76 @@ class SearchIndex:
                 out[tok] = self.display.get(best[0], best[0])
         return out
 
+    # --------------------------------------------------------------- synonyms
+    def set_synonyms(self, mapping):
+        """mapping: {customer phrase: [catalogue phrases]} (see synonyms.py)."""
+        out = []
+        for customer, targets in (mapping or {}).items():
+            toks = tokenize(customer)
+            targets = [t for t in targets if tokenize(t)]
+            if toks and targets:
+                out.append((toks, targets))
+        self.synonyms = out
+
+    @staticmethod
+    def _syn_match(ct, qt):
+        """Customer-synonym word `ct` vs typed word `qt`: same word, inflected form or one typo."""
+        if ct == qt or canon(ct) == canon(qt):
+            return True
+        # inflected form: kombinezón / kombinezónu, slúchadlá / slúchadlách (not svetlo for sveter)
+        if len(ct) >= 5 and len(qt) >= 5 and (qt.startswith(ct[:-1]) or ct.startswith(qt[:-1])):
+            return True
+        return len(ct) >= 5 and edit_distance(canon(ct), canon(qt), limit=2) <= 1
+
+    def synonym_hits(self, query):
+        """(typed words covered by a synonym, [catalogue phrases]) for the query."""
+        qt = tokenize(query)
+        used, phrases = set(), []
+        for toks, targets in self.synonyms:
+            matched = []
+            for ct in toks:
+                m = next((q for q in qt if self._syn_match(ct, q)), None)
+                if m is None:
+                    break
+                matched.append(m)
+            else:
+                used.update(matched)
+                phrases += [t for t in targets if t not in phrases]
+        return used, phrases
+
+    def strict_count(self, query):
+        """How many products match every word of the query (typos, inflection and synonyms
+        allowed). 0 means the shop has nothing for what the customer asked - used for statistics."""
+        q = fold(query).strip()
+        if q in self.exact:
+            return 1
+        syn_used, syn_phrases = self.synonym_hits(query)
+        syn_docs = set()
+        for t in tokenize(" ".join(syn_phrases)):
+            for term in self._expand(t):
+                syn_docs.update(self.postings[term])
+        sets = []
+        for t in tokenize(query):
+            docs = set()
+            for term in self._expand(t):
+                docs.update(self.postings[term])
+            if t in syn_used:
+                docs |= syn_docs
+            sets.append(docs)
+        if not sets:
+            return 0
+        return len(set.intersection(*sets))
+
     def score(self, query_terms):
         scores = defaultdict(float)
         for qt in query_terms:
             best = {}  # per query term, count the best-matching variant once per doc
-            for term, bonus in self._expand(qt).items():
-                idf = self.idf[term]
+            expansion = self._expand(qt)
+            # Variants (unfinished word, other forms, typos) share the rarity of the most common
+            # variant: for "proc" the frequent "procera" should beat a rare "procesoch".
+            shared_idf = min((self.idf[t] for t in expansion), default=0.0)
+            for term, bonus in expansion.items():
+                idf = self.idf[term] if term == qt else shared_idf
                 for i, tf in self.postings[term].items():
                     norm = tf * (self.k1 + 1) / (tf + self.k1 * (1 - self.b + self.b * self.doc_len[i] / self.avg_len))
                     s = idf * norm * bonus
@@ -306,7 +378,16 @@ class SearchIndex:
             return 1, [self.docs[self.exact[q]]]
 
         terms = tokenize(query)
+        syn_used, syn_phrases = self.synonym_hits(query)
+        if syn_used:
+            # A word covered by a synonym is searched as the catalogue word instead, unless the
+            # catalogue itself uses it often (then both are searched).
+            terms = [t for t in terms if t not in syn_used or len(self.postings.get(t, ())) >= 3]
         scores = self.score(terms) if terms else defaultdict(float)
+        if syn_phrases:
+            syn_terms = [t for t in tokenize(" ".join(syn_phrases)) if t not in terms]
+            for i, s in self.score(syn_terms).items():
+                scores[i] += 0.9 * s
         if extra_terms:
             extra = [t for t in tokenize(" ".join(extra_terms)) if t not in terms]
             for i, s in self.score(extra).items():
@@ -376,7 +457,14 @@ class SearchIndex:
         self.phrase_vocab = sorted(self.phrase_index)
 
     def suggest_queries(self, query, limit=6):
-        """Complete what the customer is typing: 'proc zim' -> 'procera zimná pracovná bunda'."""
+        """Complete what the customer is typing: 'proc zim' -> 'procera zimná pracovná bunda'.
+        A known synonym ('kombinezón') first offers the catalogue's own word ('overal')."""
+        _, syn = self.synonym_hits(query)
+        rest = self._complete(query, limit)
+        lead = [p.lower() for p in syn[:2] if fold(p) != fold(query).strip()]
+        return (lead + [r for r in rest if fold(r) not in {fold(x) for x in lead}])[:limit]
+
+    def _complete(self, query, limit):
         terms = tokenize(query)
         words = _TOKEN_RE.findall(fold(query))
         typing = bool(words) and not query.endswith(" ")

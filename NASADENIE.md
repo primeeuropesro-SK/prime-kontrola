@@ -103,3 +103,53 @@ pravým tlačidlom → **Preskúmať**, skopírujte riadok `<input …>` a dopl�
 - Náklady na AI sledujete v console.anthropic.com → **Usage**.
 - Vypnutie AI (ostane len rýchle vyhľadávanie s opravou preklepov): v Renderi zmažte `ANTHROPIC_API_KEY`.
 - Zrušenie celej funkcie: v Upgates odstráňte vložený riadok `<script …>`. E-shop sa vráti do pôvodného stavu.
+
+## Týždenný report vyhľadávania
+
+Report je na adrese (token nájdete v Renderi: **prime-ai-search → Environment → ADMIN_TOKEN**):
+
+```
+https://prime-ai-search.onrender.com/report?token=VAS_ADMIN_TOKEN
+```
+
+Predvolene ukazuje minulý týždeň (pondelok – nedeľa), odkazmi sa dá prejsť na iné týždne.
+Pre každú krajinu (Slovensko, Maďarsko) obsahuje:
+
+- počet vyhľadávaní, **úspešnosť** (podiel vyhľadávaní s klikom na produkt) a porovnanie s predchádzajúcim týždňom,
+- **Čo zákazníci hľadajú a nemáte** – AI (Claude Haiku) zoskupí nenájdené výrazy do konkrétnych produktov
+  (napr. „zvaracska kukla“, „kukla na zváranie“, „zváračská maska“ → *Zváračská kukla, 9 hľadaní*),
+  zoradí ich podľa počtu hľadaní a pripíše poznámku, čo by malo byť v sortimente. Na stiahnutie ako
+  **chýbajúce produkty (CSV)** pre Excel. Pri maďarskom e-shope sú názvy produktov po slovensky.
+- **Máte, ale zákazníci to volajú inak** – výrazy, pre ktoré produkt máte, s hotovým textom na skopírovanie
+  do `ai_search/synonyms.json`,
+- **top 20 produktov**, na ktoré zákazníci klikli z vyhľadávania,
+- **hľadali a nenašli** – výrazy, pre ktoré e-shop nemá produkt so všetkými hľadanými slovami, s dátumom a časom
+  posledného hľadania; CSV pre Excel obsahuje každé takéto hľadanie zvlášť s dátumom a časom (slovenský čas),
+- výrazy, pri ktorých výsledky boli, ale zákazník neklikol, a top 20 hľadaných výrazov,
+- počet AI vyhľadávaní a ich úspešnosť.
+
+Zaznamenáva sa iba hľadaný text, jazyk e-shopu, počet výsledkov a kliknutý produkt – žiadne IP adresy
+ani iné osobné údaje. Záznamy sa mažú po 400 dňoch.
+
+### Posielanie reportu e-mailom každý pondelok (voliteľné)
+
+V Renderi: **prime-ai-search → Environment → Add Environment Variable** pridajte:
+
+| Kľúč | Hodnota (príklad pre Gmail) |
+|---|---|
+| `SMTP_HOST` | `smtp.gmail.com` |
+| `SMTP_PORT` | `587` |
+| `SMTP_USER` | `primeeuropesro@gmail.com` |
+| `SMTP_PASSWORD` | heslo aplikácie z Google účtu (myaccount.google.com → Zabezpečenie → Heslá aplikácií), nie bežné heslo |
+| `REPORT_EMAIL_TO` | adresa (alebo viac adries oddelených čiarkou), kam report posielať |
+
+Report príde každý pondelok o 7:00 (slovenského času) za predchádzajúci týždeň.
+
+## Synonymá
+
+- **Automatické:** server raz za týždeň (a pri zmene katalógu) nechá Claude Haiku vytvoriť zoznam slov,
+  ktoré zákazníci používajú a katalóg nie (napr. kombinezón → overal). Stojí to rádovo centy mesačne.
+- **Vlastné:** súbor [`ai_search/synonyms.json`](ai_search/synonyms.json) upravíte priamo na GitHube
+  (ikona ceruzky → **Commit changes**). Render zmenu nasadí sám. Formát:
+  `"čo píše zákazník": ["výraz z katalógu"]`. Vlastné majú prednosť pred automatickými.
+- Tip: výrazy z reportu „hľadali a nenašli“ sú najlepší zdroj nových synoným.
