@@ -11,7 +11,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ai_search import ai as ai_mod  # noqa: E402
-from ai_search.search_engine import SearchIndex, fold, stem, tokenize  # noqa: E402
+from ai_search.search_engine import SearchIndex, edit_distance, fold, stem, tokenize  # noqa: E402
 from ai_search.sync import normalize_product  # noqa: E402
 
 
@@ -44,6 +44,7 @@ class FakeAnthropic:
 
     def __init__(self, replies):
         self.replies, self.calls = list(replies), []
+        self.messages = types.SimpleNamespace(create=self._create)
         self.beta = types.SimpleNamespace(messages=types.SimpleNamespace(create=self._create))
 
     def _create(self, **kwargs):
@@ -88,6 +89,43 @@ class EngineTests(unittest.TestCase):
         self.assertEqual({d["id"] for d in res[:2]}, {3, 4})
 
 
+class TypoTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        raw = RAW + [
+            product(7, "Procera Ragnar S3 - Pracovná členková obuv", ["Obuv"], 59.0, manufacturer="Procera"),
+            product(8, "Pracovná mikina fleece", ["Mikiny"], 19.0),
+        ]
+        cls.idx = SearchIndex([d for d in (normalize_product(p, "sk") for p in raw) if d])
+
+    def first(self, q):
+        _, res = self.idx.search(q)
+        return res[0]["id"] if res else None
+
+    def test_digits_instead_of_letters(self):
+        self.assertEqual(self.first("pr0cera"), 7)
+        self.assertEqual(self.idx.corrections("pr0cera"), {"pr0cera": "procera"})
+
+    def test_swapped_missing_and_doubled_letters(self):
+        for q in ("porcera", "prcera", "procerra", "proceras"):
+            self.assertEqual(self.first(q), 7, q)
+
+    def test_y_i_grammar_errors(self):
+        self.assertEqual(self.first("mykina"), 8)
+        self.assertEqual(self.first("zymne rukavyce"), 1)
+
+    def test_wrong_letter(self):
+        self.assertEqual(self.first("rukavuce zateplene"), 1)
+
+    def test_correct_words_are_not_corrected(self):
+        self.assertEqual(self.idx.corrections("pracovná mikina"), {})
+        self.assertEqual(self.idx.corrections("mik"), {})  # unfinished word while typing
+
+    def test_short_words_need_exact_prefix(self):
+        self.assertEqual(edit_distance("porcera", "procera"), 1)
+        self.assertIsNone(self.first("xyz"))
+
+
 class AITests(unittest.TestCase):
     def test_understand_and_rerank(self):
         docs = [d for d in (normalize_product(p, "sk") for p in RAW) if d]
@@ -102,7 +140,9 @@ class AITests(unittest.TestCase):
         self.assertEqual(info["max_price"], 40)
         schema = fake.calls[0]["output_config"]["format"]["schema"]
         self.assertIn("Bakanče so špicou", schema["properties"]["categories"]["items"]["enum"])
-        self.assertEqual(fake.calls[0]["fallbacks"], "default")
+        # Default model is the cheap Haiku, which has no server-side fallback parameter.
+        self.assertEqual(fake.calls[0]["model"], "claude-haiku-5-5")
+        self.assertNotIn("fallbacks", fake.calls[0])
 
         _, cands = idx.search("topánky", filters={"max_price": 40}, extra_terms=info["keywords"])
         ranked = q.rerank("topánky s oceľovou špičkou do 40 €", "sk", cands, 5)

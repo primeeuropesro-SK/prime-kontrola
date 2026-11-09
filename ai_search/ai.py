@@ -11,10 +11,13 @@ from collections import OrderedDict
 
 log = logging.getLogger("ai_search.ai")
 
-MODEL = os.environ.get("AI_MODEL", "claude-opus-5-5")
+MODEL = os.environ.get("AI_MODEL", "claude-haiku-5-5")  # cheapest; e.g. claude-sonnet-5-5 for higher quality
 EFFORT = os.environ.get("AI_EFFORT", "low")  # search must be quick; raise for better reasoning
 RERANK = os.environ.get("AI_RERANK", "1") == "1"
 RERANK_CANDIDATES = int(os.environ.get("AI_RERANK_CANDIDATES", "25"))
+
+# Models that support the server-side refusal fallback (Claude Haiku 5.5 does not).
+FALLBACK_MODELS = {"claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"}
 
 LANG_NAMES = {"sk": "slovenčina", "hu": "maďarčina (magyar)", "cs": "čeština", "en": "English"}
 
@@ -56,15 +59,18 @@ class QueryAI:
 
     # ------------------------------------------------------------------ helpers
     def _call(self, system, user, schema, max_tokens=2000):
-        response = self.client.beta.messages.create(
+        params = dict(
             model=MODEL,
             max_tokens=max_tokens,
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
             output_config={"effort": EFFORT, "format": {"type": "json_schema", "schema": schema}},
             system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": user}],
         )
+        if MODEL in FALLBACK_MODELS:
+            response = self.client.beta.messages.create(
+                betas=["server-side-fallback-2026-07-01"], fallbacks="default", **params)
+        else:
+            response = self.client.messages.create(**params)
         if response.stop_reason in ("refusal", "max_tokens"):
             log.warning("AI stopped with %s", response.stop_reason)
             return None
@@ -101,6 +107,8 @@ class QueryAI:
             "pomôckami (OOPP). Zákazník napíše, čo hľadá, často voľne a bez presných názvov. "
             "Preveď dopyt na parametre pre fulltextové vyhľadávanie v katalógu.\n\n"
             "Pravidlá:\n"
+            "- Zákazníci robia preklepy, gramatické chyby a píšu bez diakritiky (pr0cera, porcera, mykina, "
+            "rukavyce, zateplene). Vždy ich oprav na správny tvar podľa katalógu a výrobcov.\n"
             "- keywords: 3–10 krátkych slov alebo fráz v jazyku katalógu, ako by boli v názve alebo popise "
             "produktu (synonymá, odborné výrazy, normy – napr. S1P, S3, EN388, EN ISO 20471). Napr. "
             "'topánky s oceľovou špičkou' -> poltopánka, bakanče, špica, S1, S3. Bez výplňových slov.\n"

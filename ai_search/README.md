@@ -18,6 +18,11 @@ e-shop (widget.js) ──▶ /api/search ─────────────
 
 - **Počas písania** sa výsledky ukazujú okamžite (fulltext, ignoruje diakritiku, rozumie skloňovaniu:
   rukavice / rukavíc / rukaviciach, presná zhoda kódu produktu alebo EAN).
+- **Preklepy a gramatické chyby** sa opravujú už v okamžitom vyhľadávaní, bez AI a zadarmo:
+  číslice namiesto písmen (`pr0cera`), prehodené, chýbajúce alebo zdvojené písmená (`porcera`, `prcera`,
+  `procerra`), i/y (`mykina`, `rukavyce`, `zymna`) a zlé písmeno (`rukavuce`). Krátke slová (do 3 znakov)
+  musia sedieť presne, slová so 4–5 znakmi znesú 1 chybu, dlhšie 2. Widget ukáže
+  „Zobrazujem výsledky pre: procera zimná bunda“.
 - **Enter alebo tlačidlo „✨ Opýtať sa AI“** spustí AI vyhľadávanie: Claude premení voľný text na kľúčové slová
   v jazyku katalógu, vyberie kategórie, cenový rozsah a potom zoradí najlepších kandidátov.
 - Ak AI nie je dostupná (chýba kľúč, výpadok), vyhľadávanie funguje ďalej bez nej.
@@ -80,7 +85,7 @@ Premenné prostredia sú v `.env.example`.
 | Premenná | Význam |
 |---|---|
 | `ANTHROPIC_API_KEY` | kľúč pre Claude API; bez neho beží iba fulltext |
-| `AI_MODEL` | predvolene `claude-opus-5-5`; pre nižšiu cenu a rýchlejšiu odozvu možno dať `claude-haiku-5-5` |
+| `AI_MODEL` | predvolene `claude-haiku-5-5` (najlacnejší a najrýchlejší); pre vyššiu kvalitu `claude-sonnet-5-5` |
 | `AI_EFFORT` | `low` (rýchle), `medium`, `high` |
 | `AI_RERANK` | `1` = Claude zoradí výsledky a napíše dôvod, `0` = iba pochopenie dopytu (rýchlejšie, lacnejšie) |
 | `AI_RATE_PER_MIN` | max. AI dopytov za minútu z jednej IP |
@@ -115,5 +120,5 @@ Odkaz „Zobraziť všetky výsledky“ odošle pôvodný formulár, takže str�
 ## Náklady
 
 Okamžité vyhľadávanie počas písania AI nevolá. Claude sa volá len pri Enter / tlačidle AI (2 volania
-na dopyt, opakované dopyty idú z cache). Pre minimálne náklady nastavte `AI_MODEL=claude-haiku-5-5`
-a prípadne `AI_RERANK=0`.
+na dopyt, opakované dopyty idú z cache). Predvolený model je najlacnejší Claude Haiku 5.5
+(0,10 $ / 0,50 $ za milión vstupných / výstupných tokenov). Pre ešte nižšie náklady nastavte `AI_RERANK=0`.

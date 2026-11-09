@@ -104,6 +104,7 @@ class Store:
             "total": total,
             "products": products,
             "categories": idx.suggest_categories(q),
+            "corrections": idx.corrections(q),
             "ai": {"summary": ai_info.get("summary"), "keywords": ai_info.get("keywords")} if ai_info else None,
             "took_ms": int((time.time() - t0) * 1000),
         }
@@ -181,7 +182,7 @@ class Handler(BaseHTTPRequestHandler):
             use_ai = qs.get("ai", ["0"])[0] == "1" and len(q) >= 3
             ai_limited = use_ai and not _ai_allowed(self._client_ip())
             if not q:
-                return self._send(200, {"query": "", "total": 0, "products": [], "categories": [], "ai": None})
+                return self._send(200, {"query": "", "total": 0, "products": [], "categories": [], "corrections": {}, "ai": None})
             result = STORE.search(q, lang, limit, use_ai and not ai_limited)
             if ai_limited:
                 result["ai_rate_limited"] = True
@@ -225,7 +226,7 @@ def main():
     if SYNC_INTERVAL_MIN > 0:
         threading.Thread(target=_sync_loop, daemon=True).start()
     log.info("AI %s (model %s)", "enabled" if STORE.ai.enabled else "DISABLED - set ANTHROPIC_API_KEY",
-             os.environ.get("AI_MODEL", "claude-opus-5-5"))
+             os.environ.get("AI_MODEL", "claude-haiku-5-5"))
     log.info("listening on :%d", PORT)
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 

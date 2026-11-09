@@ -20,10 +20,10 @@
   var T = {
     sk: { ai: "Opýtať sa AI", aiHint: "Napíšte, čo potrebujete – napr. „zimné rukavice do 10 €“",
           thinking: "AI hľadá najvhodnejšie produkty…", all: "Zobraziť všetky výsledky", none: "Nič sme nenašli. Skúste to opísať inak.",
-          inStock: "Skladom", outStock: "Na objednávku", from: "od ", cats: "Kategórie", close: "Zavrieť" },
+          inStock: "Skladom", outStock: "Na objednávku", fixed: "Zobrazujem výsledky pre:", from: "od ", cats: "Kategórie", close: "Zavrieť" },
     hu: { ai: "Kérdezd az AI-t", aiHint: "Írd le, mire van szükséged – pl. „téli kesztyű 3000 Ft alatt”",
           thinking: "Az AI keresi a legjobb termékeket…", all: "Összes találat", none: "Nincs találat. Próbáld másképp leírni.",
-          inStock: "Raktáron", outStock: "Rendelésre", from: "", cats: "Kategóriák", close: "Bezár" }
+          inStock: "Raktáron", outStock: "Rendelésre", fixed: "Találatok erre:", from: "", cats: "Kategóriák", close: "Bezár" }
   };
   var t = T[LANG] || T.sk;
 
@@ -49,6 +49,7 @@
     ".pas-item .pas-p{margin-left:auto;font-weight:700;color:#111;white-space:nowrap;align-self:center}" +
     ".pas-ok{color:#2f7d32}.pas-no{color:#b26a00}" +
     ".pas-foot{display:block;padding:10px 12px;text-align:center;color:#e4572e;font-weight:600;cursor:pointer;text-decoration:none}" +
+    ".pas-fix{padding:8px 12px;font-size:13px;color:#555;border-bottom:1px solid #eee}.pas-fix b{color:#111}" +
     ".pas-msg{padding:16px 12px;color:#666}" +
     ".pas-spin{display:inline-block;width:14px;height:14px;border:2px solid #f39200;border-right-color:transparent;" +
     "border-radius:50%;animation:pasr .7s linear infinite;vertical-align:-2px;margin-right:8px}" +
@@ -98,6 +99,14 @@
         h += '<div class="pas-ai"><button type="button" data-pas-ai>✨ ' + esc(t.ai) + "</button><span>" + esc(t.aiHint) + "</span></div>";
       } else if (data.ai && data.ai.summary) {
         h += '<div class="pas-summary">✨ ' + esc(data.ai.summary) + "</div>";
+      }
+      var fixes = data.corrections ? Object.keys(data.corrections) : [];
+      if (fixes.length) {
+        var fixedQuery = data.query.split(/\s+/).map(function (w) {
+          var k = w.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+          return data.corrections[k] || w;
+        }).join(" ");
+        h += '<div class="pas-fix">' + esc(t.fixed) + " <b>" + esc(fixedQuery) + "</b></div>";
       }
       if (!isAi && data.categories && data.categories.length) {
         h += '<div class="pas-cats"><b>' + esc(t.cats) + "</b>" +
