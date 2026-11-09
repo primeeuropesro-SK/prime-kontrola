@@ -31,6 +31,14 @@ def now_local():
     return datetime.now(TZ) if TZ else datetime.now()
 
 
+def fmt_time(ts, with_time=True):
+    """Unix time -> '09.11.2026 14:05' in Bratislava time."""
+    if not ts:
+        return ""
+    d = datetime.fromtimestamp(ts, TZ) if TZ else datetime.fromtimestamp(ts)
+    return d.strftime("%d.%m.%Y %H:%M" if with_time else "%d.%m.%Y")
+
+
 class EventLog:
     def __init__(self, directory):
         self.dir = directory
@@ -120,7 +128,11 @@ def summarize(searches, products=None, top=20):
 
         def top_queries(items, n):
             c = Counter(s["qf"] for s in items)
-            return [{"q": display[q], "count": k} for q, k in c.most_common(n)]
+            first, last = {}, {}
+            for s in items:
+                first[s["qf"]] = min(first.get(s["qf"], s["t"]), s["t"])
+                last[s["qf"]] = max(last.get(s["qf"], 0), s["t"])
+            return [{"q": display[q], "count": k, "first": first[q], "last": last[q]} for q, k in c.most_common(n)]
 
         query_counts = Counter(s["qf"] for s in ss)
         query_ok = Counter(s["qf"] for s in ok)
@@ -144,6 +156,8 @@ def summarize(searches, products=None, top=20):
             ],
             "not_found": top_queries(zero, 50),
             "not_found_all": top_queries(zero, 500),
+            # every unfound search with its date and time, newest first (for the CSV)
+            "not_found_events": [{"q": s["q"], "t": s["t"]} for s in sorted(zero, key=lambda s: -s["t"])[:5000]],
             "no_click_queries": top_queries(no_click, top),
         }
     return out
@@ -184,11 +198,10 @@ def add_demand(report, ai, cache_dir, phrases_by_lang):
     grouped by AI. Cached per week and language so viewing the report costs nothing."""
     import hashlib
     for lang, r in report["langs"].items():
-        counts = Counter()
-        for x in r.get("not_found_all", r["not_found"]):
+        counts, last = Counter(), {}
+        for x in r.get("not_found_all", r["not_found"]) + r.get("no_click_queries", []):
             counts[x["q"]] += x["count"]
-        for x in r.get("no_click_queries", []):
-            counts[x["q"]] += x["count"]
+            last[x["q"]] = max(last.get(x["q"], 0), x.get("last", 0))
         queries = [q for q, _ in counts.most_common(DEMAND_MAX_QUERIES)]
         if not queries:
             r["demand"] = []
@@ -215,7 +228,8 @@ def add_demand(report, ai, cache_dir, phrases_by_lang):
             qs = [q for q in it.get("queries", []) if q in counts]
             if not qs:
                 continue
-            demand.append(dict(it, queries=sorted(qs, key=lambda q: -counts[q]), count=sum(counts[q] for q in qs)))
+            demand.append(dict(it, queries=sorted(qs, key=lambda q: -counts[q]), count=sum(counts[q] for q in qs),
+                               last=max(last.get(q, 0) for q in qs)))
         order = {"missing": 0, "synonym": 1, "unclear": 2}
         demand.sort(key=lambda d: (order.get(d["status"], 3), -d["count"]))
         r["demand"] = demand
@@ -225,12 +239,12 @@ def add_demand(report, ai, cache_dir, phrases_by_lang):
 def demand_csv(report):
     buf = io.StringIO()
     w = csv.writer(buf, delimiter=";")
-    w.writerow(["krajina", "produkt", "stav", "počet hľadaní", "ako hľadali", "výraz v katalógu", "poznámka"])
+    w.writerow(["krajina", "produkt", "stav", "počet hľadaní", "naposledy hľadané", "ako hľadali", "výraz v katalógu", "poznámka"])
     status = {"missing": "chýba v sortimente", "synonym": "máte – doplniť synonymum", "unclear": "nejasné"}
     for lang, r in report["langs"].items():
         for d in r.get("demand", []):
             w.writerow([COUNTRY.get(lang, lang), d["product"], status.get(d["status"], d["status"]), d["count"],
-                        ", ".join(d["queries"]), d.get("catalog_phrase", ""), d.get("note", "")])
+                        fmt_time(d.get("last")), ", ".join(d["queries"]), d.get("catalog_phrase", ""), d.get("note", "")])
     return "\ufeff" + buf.getvalue()
 
 
@@ -289,8 +303,9 @@ td.n{{text-align:right;white-space:nowrap}} a{{color:#1f5fbf}} .cols{{display:gr
             syn = [d for d in demand if d["status"] == "synonym"]
             parts.append("<h3>Čo zákazníci hľadajú a nemáte</h3>")
             if missing:
-                parts.append("<table><tr><th>Produkt</th><th>Hľadaní</th><th>Ako hľadali</th><th>Poznámka</th></tr>" + "".join(
+                parts.append("<table><tr><th>Produkt</th><th>Hľadaní</th><th>Naposledy</th><th>Ako hľadali</th><th>Poznámka</th></tr>" + "".join(
                     f"<tr><td><b>{e(d['product'])}</b></td><td class='n'>{d['count']}</td>"
+                    f"<td class='n'>{e(fmt_time(d.get('last')))}</td>"
                     f"<td>{e(', '.join(d['queries'][:6]))}</td><td>{e(d.get('note', ''))}</td></tr>" for d in missing)
                     + "</table>")
             else:
@@ -316,8 +331,9 @@ td.n{{text-align:right;white-space:nowrap}} a{{color:#1f5fbf}} .cols{{display:gr
                       f'<td class="n">{x["clicks"]}</td>'] for i, x in enumerate(r["top_products"], 1)]
         parts.append(table("Top 20 produktov z vyhľadávania", ["#", "Produkt", "Kliknutia"], prod_rows))
         parts.append('<div class="cols"><div>')
-        parts.append(table("Hľadali a nenašli", ["Výraz", "Počet"],
-                           [[f"<td>{e(x['q'])}</td>", f'<td class="n">{x["count"]}</td>'] for x in r["not_found"]]))
+        parts.append(table("Hľadali a nenašli", ["Výraz", "Počet", "Naposledy hľadané"],
+                           [[f"<td>{e(x['q'])}</td>", f'<td class="n">{x["count"]}</td>',
+                             f'<td class="n">{e(fmt_time(x.get("last")))}</td>'] for x in r["not_found"]]))
         parts.append("</div><div>")
         parts.append(table("Našli, ale neklikli", ["Výraz", "Počet"],
                            [[f"<td>{e(x['q'])}</td>", f'<td class="n">{x["count"]}</td>'] for x in r["no_click_queries"]]))
@@ -336,8 +352,9 @@ td.n{{text-align:right;white-space:nowrap}} a{{color:#1f5fbf}} .cols{{display:gr
 def not_found_csv(report):
     buf = io.StringIO()
     w = csv.writer(buf, delimiter=";")
-    w.writerow(["krajina", "výraz", "počet"])
+    w.writerow(["krajina", "dátum", "čas", "hľadaný výraz"])
     for lang, r in report["langs"].items():
-        for x in r["not_found"]:
-            w.writerow([COUNTRY.get(lang, lang), x["q"], x["count"]])
+        for x in r.get("not_found_events", []):
+            date_s, time_s = fmt_time(x["t"]).split(" ")
+            w.writerow([COUNTRY.get(lang, lang), date_s, time_s, x["q"]])
     return "﻿" + buf.getvalue()  # BOM so Excel opens it with diacritics

@@ -256,7 +256,8 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(sk["searches"], 5)  # proc→procera→suggestion→click is one search
         self.assertEqual(sk["successful"], 2)
         self.assertEqual(sk["success_rate"], 40.0)
-        self.assertEqual(sk["not_found"], [{"q": "kombinezon", "count": 2}])
+        self.assertEqual([(x["q"], x["count"], x["first"], x["last"]) for x in sk["not_found"]], [("kombinezon", 2, 0, 60)])
+        self.assertEqual([x["t"] for x in sk["not_found_events"]], [60, 0])  # each search with its time, newest first
         self.assertEqual(sk["no_click_queries"][0]["q"], "vesta")
         self.assertEqual((sk["ai_searches"], sk["ai_success_rate"]), (1, 100.0))
         self.assertEqual(sk["top_products"][0]["title"], "Procera Silus")
@@ -275,7 +276,10 @@ class AnalyticsTests(unittest.TestCase):
         self.assertGreater(rep["langs"]["sk"]["searches"], 0)
         page = analytics.render_html(rep, {"sk": "https://www.primework.sk"})
         self.assertIn("Top 20 produktov", page)
-        self.assertIn("kombinezon", analytics.not_found_csv(rep))
+        csv_text = analytics.not_found_csv(rep)
+        self.assertIn("kombinezon", csv_text)
+        self.assertRegex(csv_text, r"Slovensko;\d\d\.\d\d\.\d{4};\d\d:\d\d;kombinezon")
+        self.assertIn("Naposledy hľadané", page)
         self.assertEqual(analytics.week_range(week)[0], today - timedelta(days=today.weekday()))
 
 
@@ -308,7 +312,7 @@ class DemandTests(unittest.TestCase):
         analytics.add_demand(report, FakeAI(), d, {"sk": ["overal"]})  # same data -> cached, no new AI call
         self.assertEqual(FakeAI.calls, 1)
         csv_text = analytics.demand_csv(report)
-        self.assertIn("Zváračská kukla;chýba v sortimente;5", csv_text)
+        self.assertIn("Zváračská kukla;chýba v sortimente;5;", csv_text)
 
     def test_without_ai_report_still_works(self):
         import tempfile

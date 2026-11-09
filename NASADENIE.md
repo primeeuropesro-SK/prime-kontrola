@@ -123,7 +123,8 @@ Pre každú krajinu (Slovensko, Maďarsko) obsahuje:
 - **Máte, ale zákazníci to volajú inak** – výrazy, pre ktoré produkt máte, s hotovým textom na skopírovanie
   do `ai_search/synonyms.json`,
 - **top 20 produktov**, na ktoré zákazníci klikli z vyhľadávania,
-- **hľadali a nenašli** – výrazy, pre ktoré e-shop nemá produkt so všetkými hľadanými slovami (aj ako CSV pre Excel),
+- **hľadali a nenašli** – výrazy, pre ktoré e-shop nemá produkt so všetkými hľadanými slovami, s dátumom a časom
+  posledného hľadania; CSV pre Excel obsahuje každé takéto hľadanie zvlášť s dátumom a časom (slovenský čas),
 - výrazy, pri ktorých výsledky boli, ale zákazník neklikol, a top 20 hľadaných výrazov,
 - počet AI vyhľadávaní a ich úspešnosť.
 
