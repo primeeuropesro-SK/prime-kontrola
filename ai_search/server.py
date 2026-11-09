@@ -216,13 +216,21 @@ def _sync_loop():
             log.warning("periodic sync failed: %s", e)
 
 
+def _initial_sync():
+    try:
+        STORE.sync_now()
+    except Exception as e:
+        log.error("initial sync from Upgates failed: %s", e)
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
         STORE.load(sync.load_catalog())
     except FileNotFoundError:
-        log.info("no cached catalog, syncing from Upgates (takes a few minutes)...")
-        STORE.sync_now()
+        # Start listening right away (hosting health checks), load products in the background.
+        log.info("no cached catalog, syncing from Upgates in the background (takes a few minutes)...")
+        threading.Thread(target=_initial_sync, daemon=True).start()
     if SYNC_INTERVAL_MIN > 0:
         threading.Thread(target=_sync_loop, daemon=True).start()
     log.info("AI %s (model %s)", "enabled" if STORE.ai.enabled else "DISABLED - set ANTHROPIC_API_KEY",
