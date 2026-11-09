@@ -131,6 +131,56 @@ class QueryAI:
             self.cache.put(key, result)
         return result
 
+    # --------------------------------------------------------------- synonyms
+    def synonyms(self, lang, phrases):
+        """Words customers use for the catalogue's products that the catalogue itself does not use.
+        Returns [{"customer": "...", "catalog": "<one of phrases>"}] or None."""
+        if not (self.enabled and phrases):
+            return None
+        schema = {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "customer": {"type": "string"},
+                            "catalog": {"type": "string", "enum": phrases},
+                        },
+                        "required": ["customer", "catalog"],
+                        "additionalProperties": False,
+                    },
+                }
+            },
+            "required": ["items"],
+            "additionalProperties": False,
+        }
+        system = (
+            "Pomáhaš vyhľadávaniu e-shopu s pracovným oblečením, obuvou, rukavicami a OOPP. "
+            "Dostaneš zoznam výrazov, ktoré používa katalóg. Vypíš slová a krátke frázy, ktoré zákazníci "
+            "bežne píšu do vyhľadávania pre tie isté produkty, ale v katalógu nie sú: synonymá, hovorové "
+            "a nárečové názvy, zastarané alebo nepresné pomenovania, anglicizmy, iné tvary slov. "
+            "Ku každému priraď najbližší výraz z katalógu. Píš v jazyku katalógu, malými písmenami, "
+            "s diakritikou. Bez značiek, bez výrazov, ktoré už v zozname sú, bez zjavne nesúvisiacich slov. "
+            "Najviac 250 položiek."
+        )
+        user = f"Jazyk katalógu: {LANG_NAMES.get(lang, lang)}\nVýrazy katalógu:\n" + "\n".join(phrases)
+        try:
+            result = self._call(system, user, schema, max_tokens=16000)
+        except Exception as e:
+            log.warning("AI synonyms failed: %s", e)
+            return None
+        if not result:
+            return None
+        seen, out = set(), []
+        for it in result["items"]:
+            c = " ".join(it["customer"].lower().split())[:60]
+            if c and c not in seen and c != it["catalog"].lower():
+                seen.add(c)
+                out.append({"customer": c, "catalog": it["catalog"]})
+        return out
+
     # ----------------------------------------------------------------- rerank
     def rerank(self, query, lang, candidates, limit):
         """Return [(product_id, reason)] ordered by relevance, or None."""

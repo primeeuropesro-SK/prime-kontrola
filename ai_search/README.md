@@ -33,6 +33,10 @@ e-shop (widget.js) ──▶ /api/search ─────────────
   Tlačidlo Späť na telefóne ho zavrie a zákazník ostane na tej istej stránke. Najviac 4 návrhy,
   kategórie a značky v jednom vodorovnom páse, hneď pod nimi produkty. Pri posúvaní výsledkov sa
   skryje klávesnica. Nezávisí od toho, kde má šablóna Upgates vyhľadávacie pole.
+- **Synonymá** po slovensky aj po maďarsky: automaticky (Claude Haiku, raz týždenne) aj vlastné
+  v `synonyms.json` – „kombinezón“ nájde overaly, „slúchadlá“ chrániče sluchu, „fejhallgató“ hallásvédő.
+- **Týždenný report** na `/report?token=…` (voliteľne e-mailom každý pondelok): úspešnosť, top 20
+  produktov a hľadaných výrazov podľa krajiny, výrazy, ktoré zákazníci hľadali a nenašli. Pozri NASADENIE.md.
 - **Enter alebo tlačidlo „✨ Opýtať sa AI“** spustí AI vyhľadávanie: Claude premení voľný text na kľúčové slová
   v jazyku katalógu, vyberie kategórie, cenový rozsah a potom zoradí najlepších kandidátov.
 - Ak AI nie je dostupná (chýba kľúč, výpadok), vyhľadávanie funguje ďalej bez nej.
