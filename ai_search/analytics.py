@@ -292,7 +292,9 @@ td.n{{text-align:right;white-space:nowrap}} a{{color:#1f5fbf}} .cols{{display:gr
                      f'<a href="{e(base_url)}?week={e(report["next_week"])}{q}">nasledujúci týždeň →</a>'
                      f'<a href="{e(base_url)}/not-found.csv?week={e(report["week"])}{q}">hľadali a nenašli (CSV)</a>'
                      f'<a href="{e(base_url)}/demand.csv?week={e(report["week"])}{q}">chýbajúce produkty (CSV)</a>'
-                     f'<a href="{e(base_url)}/searches.csv?week={e(report["week"])}{q}">všetky vyhľadávania (CSV)</a></p>')
+                     f'<a href="{e(base_url)}/searches.csv?week={e(report["week"])}{q}">všetky vyhľadávania (CSV)</a></p>'
+                     f'<p class="nav"><b><a href="{e(base_url)}/ai?week={e(report["week"])}&filter=unrated{q}">✨ AI odpovede – hodnotenie a opravy</a></b>'
+                     f'<a href="{e(base_url)}/rules?{q[1:]}">pravidlá a pokyny pre AI</a></p>')
     if not report["langs"]:
         parts.append('<p class="empty">V tomto týždni nie sú zaznamenané žiadne vyhľadávania.</p>')
     for lang, r in report["langs"].items():

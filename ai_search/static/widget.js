@@ -30,7 +30,8 @@
     sk: { ai: "Opýtať sa AI", aiHint: "Napíšte vlastnými slovami, čo potrebujete",
           thinking: "AI hľadá najvhodnejšie produkty…",
           steps: ["Rozumiem, čo hľadáte…", "Prehľadávam celý katalóg…", "Vyberám najvhodnejšie produkty…", "Ešte chvíľku…"],
-          aiSlow: "AI teraz neodpovedá, zobrazujem bežné výsledky.", all: "Zobraziť všetky výsledky", none: "Nič sme nenašli. Skúste to opísať inak alebo sa opýtajte AI.",
+          aiSlow: "AI teraz neodpovedá, zobrazujem bežné výsledky.",
+          helped: "Pomohlo vám to?", thanks: "Ďakujeme za hodnotenie!", all: "Zobraziť všetky výsledky", none: "Nič sme nenašli. Skúste to opísať inak alebo sa opýtajte AI.",
           inStock: "Skladom", outStock: "Na objednávku", from: "od ", fixed: "Výsledky pre:",
           fav: "Pridať do obľúbených", cmp: "Pridať do porovnania", favDone: "Pridané do obľúbených",
           cmpDone: "Pridané do porovnania", actFail: "Nepodarilo sa, otváram produkt…",
@@ -39,7 +40,8 @@
     hu: { ai: "Kérdezd az AI-t", aiHint: "Írd le a saját szavaiddal, mire van szükséged",
           thinking: "Az AI keresi a legjobb termékeket…",
           steps: ["Értem, mit keresel…", "Átnézem a teljes kínálatot…", "Kiválasztom a legmegfelelőbb termékeket…", "Még egy pillanat…"],
-          aiSlow: "Az AI most nem válaszol, a szokásos találatokat mutatom.", all: "Összes találat", none: "Nincs találat. Próbáld másképp leírni, vagy kérdezd az AI-t.",
+          aiSlow: "Az AI most nem válaszol, a szokásos találatokat mutatom.",
+          helped: "Segített?", thanks: "Köszönjük az értékelést!", all: "Összes találat", none: "Nincs találat. Próbáld másképp leírni, vagy kérdezd az AI-t.",
           inStock: "Raktáron", outStock: "Rendelésre", from: "", fixed: "Találatok erre:",
           fav: "Kedvencekhez", cmp: "Összehasonlításhoz", favDone: "Hozzáadva a kedvencekhez",
           cmpDone: "Hozzáadva az összehasonlításhoz", actFail: "Nem sikerült, megnyitom a terméket…",
@@ -57,7 +59,10 @@
     ".pas-ai button{border:0;border-radius:999px;padding:6px 12px;font:600 13px/1.2 inherit;cursor:pointer;" +
     "background:linear-gradient(90deg,#f39200,#e4572e);color:#fff;white-space:nowrap}" +
     ".pas-ai span{color:#888;font-size:12px}" +
-    ".pas-summary{padding:10px 14px;background:#fff8ec;border-bottom:1px solid #f3e2c2;font-weight:600}" +
+    ".pas-summary{padding:10px 14px;background:#fff8ec;border-bottom:1px solid #f3e2c2;font-weight:600;display:flex;" +
+    "gap:10px;align-items:center;flex-wrap:wrap}.pas-fb{margin-left:auto;font-weight:400;font-size:12px;color:#777;display:flex;" +
+    "align-items:center;gap:4px}.pas-fb button{border:1px solid #e8d3ad;background:#fff;border-radius:999px;width:36px;height:30px;padding:0;display:inline-flex;align-items:center;justify-content:center;" +
+    "cursor:pointer;font-size:15px;line-height:1}.pas-fb button:hover{background:#fff1d9}" +
     ".pas-fix{padding:8px 14px;font-size:13px;color:#666;border-bottom:1px solid #f0f0f0}.pas-fix b{color:#111}" +
     ".pas-cols{display:flex}.pas-left{flex:0 0 36%;border-right:1px solid #eee;padding:4px 0 8px}.pas-right{flex:1;min-width:0}" +
     ".pas-h{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#999;padding:10px 14px 4px;font-weight:600}" +
@@ -238,7 +243,11 @@
     var q = data.query || "";
     var h = "";
     if (isAi) {
-      if (data.ai && data.ai.summary) h += '<div class="pas-summary">✨ ' + esc(data.ai.summary) + "</div>";
+      if (data.ai && data.ai.summary) {
+        h += '<div class="pas-summary"><span>✨ ' + esc(data.ai.summary) + '</span><span class="pas-fb" data-pas-fbbox>' +
+          esc(t.helped) + ' <button type="button" data-pas-fb="up" aria-label="áno">👍</button>' +
+          '<button type="button" data-pas-fb="down" aria-label="nie">👎</button></span></div>';
+      }
     } else if (q.trim().length >= 3) {
       h += '<div class="pas-ai"><button type="button" data-pas-ai>✨ ' + esc(t.ai) + "</button>" +
         (compact ? "" : "<span>" + esc(t.aiHint) + "</span>") + "</div>";
@@ -336,7 +345,7 @@
         if (ctrl) timeout = setTimeout(function () { ctrl.abort(); }, 20000);
       }
       var url = API + "/api/search?lang=" + encodeURIComponent(LANG) + "&limit=" + (ai ? 10 : (o.compact ? 8 : 6)) +
-        "&ai=" + (ai ? 1 : 0) + "&q=" + encodeURIComponent(q);
+        "&ai=" + (ai ? 1 : 0) + "&q=" + encodeURIComponent(q) + (ai ? "&sid=" + SID : "");
       fetch(url, { credentials: "omit", signal: ctrl ? ctrl.signal : undefined }).then(function (r) { return r.json(); }).then(function (data) {
         clearTimeout(timeout);
         if (my !== seq) return; // a newer query is already running
@@ -401,6 +410,17 @@
       if ((el = e.target.closest("[data-pas-ai]"))) { e.preventDefault(); track("ai", field.value); search(field.value.trim(), true); if (!o.compact) field.focus(); return; }
       if ((el = e.target.closest("[data-pas-q]"))) { e.preventDefault(); applyQuery(el.getAttribute("data-pas-q")); if (o.compact) field.blur(); return; }
       if ((el = e.target.closest("[data-pas-all]"))) { e.preventDefault(); submitAll(); return; }
+      if ((el = e.target.closest("[data-pas-fb]"))) {
+        e.preventDefault();
+        var vote = el.getAttribute("data-pas-fb");
+        try {
+          fetch(API + "/api/track?type=ai_feedback&v=" + vote + "&lang=" + encodeURIComponent(LANG) + "&sid=" + SID +
+            "&q=" + encodeURIComponent(field.value.trim()), { keepalive: true, credentials: "omit" });
+        } catch (err) { /* ignore */ }
+        var fbBox = el.closest("[data-pas-fbbox]");
+        if (fbBox) fbBox.textContent = t.thanks;
+        return;
+      }
       if ((el = e.target.closest("[data-pas-act]"))) {
         e.preventDefault();
         e.stopPropagation();

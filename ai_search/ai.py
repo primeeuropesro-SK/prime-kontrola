@@ -31,6 +31,13 @@ def _nullable_number():
     return {"anyOf": [{"type": "number"}, {"type": "null"}]}
 
 
+def _owner_rules(instructions):
+    if not instructions:
+        return ""
+    return ("\n\nPokyny majiteľa e-shopu (dodrž ich, ak sa týkajú dopytu):\n"
+            + "\n".join(f"- {i}" for i in instructions))
+
+
 class _LRU:
     def __init__(self, size=500):
         self.size, self.data, self.lock = size, OrderedDict(), threading.Lock()
@@ -78,12 +85,14 @@ class QueryAI:
         return json.loads(text) if text else None
 
     # -------------------------------------------------------- query understanding
-    def understand(self, query, lang, index):
+    def understand(self, query, lang, index, instructions=()):
         """Return {"keywords", "categories", "manufacturers", "min_price", "max_price",
-        "in_stock_only", "summary"} or None when AI is unavailable."""
+        "in_stock_only", "summary"} or None when AI is unavailable.
+        instructions: the shop owner's own rules for the AI (from the report)."""
         if not self.enabled:
             return None
-        key = ("u", lang, query.strip().lower())
+        instructions = tuple(instructions or ())
+        key = ("u", lang, query.strip().lower(), instructions)
         cached = self.cache.get(key)
         if cached is not None:
             return cached
@@ -120,7 +129,7 @@ class QueryAI:
             "(napr. 'Hľadám zimné zateplené pracovné rukavice do 10 €.').\n\n"
             f"Kategórie katalógu: {json.dumps(index.categories, ensure_ascii=False)}\n"
             f"Výrobcovia: {json.dumps(index.manufacturers, ensure_ascii=False)}"
-        )
+        ) + _owner_rules(instructions)
         user = f"Jazyk katalógu: {LANG_NAMES.get(lang, lang)}\nDopyt zákazníka: {query}"
         try:
             result = self._call(system, user, schema, max_tokens=2000)
@@ -234,12 +243,13 @@ class QueryAI:
         return result["items"] if result else None
 
     # ----------------------------------------------------------------- rerank
-    def rerank(self, query, lang, candidates, limit):
+    def rerank(self, query, lang, candidates, limit, instructions=()):
         """Return [(product_id, reason)] ordered by relevance, or None."""
         if not (self.enabled and RERANK and candidates):
             return None
+        instructions = tuple(instructions or ())
         ids = [c["id"] for c in candidates]
-        key = ("r", lang, query.strip().lower(), tuple(ids))
+        key = ("r", lang, query.strip().lower(), tuple(ids), instructions)
         cached = self.cache.get(key)
         if cached is not None:
             return cached
@@ -278,7 +288,7 @@ class QueryAI:
             f"zodpovedajú dopytu zákazníka, zoradené od najvhodnejšieho (najviac {limit}). Vynechaj tie, ktoré "
             "zjavne nesedia. Ku každému napíš krátky dôvod (max 12 slov) v jazyku zákazníka. "
             "Nevymýšľaj vlastnosti, ktoré nie sú v údajoch."
-        )
+        ) + _owner_rules(instructions)
         user = f"Dopyt: {query}\nJazyk: {LANG_NAMES.get(lang, lang)}\nKandidáti:\n{json.dumps(listing, ensure_ascii=False)}"
         try:
             result = self._call(system, user, schema, max_tokens=3000)

@@ -153,3 +153,8 @@ Report príde každý pondelok o 7:00 (slovenského času) za predchádzajúci t
   (ikona ceruzky → **Commit changes**). Render zmenu nasadí sám. Formát:
   `"čo píše zákazník": ["výraz z katalógu"]`. Vlastné majú prednosť pred automatickými.
 - Tip: výrazy z reportu „hľadali a nenašli“ sú najlepší zdroj nových synoným.
+
+## Zlepšovanie AI odpovedí
+
+Hodnotenie AI odpovedí, pripínanie a skrývanie produktov a pokyny pre AI: pozri
+[PROCES_ZLEPSOVANIA.md](PROCES_ZLEPSOVANIA.md).
