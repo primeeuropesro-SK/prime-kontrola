@@ -346,7 +346,7 @@ class Handler(BaseHTTPRequestHandler):
             threading.Thread(target=_initial_sync, daemon=True).start()
             return self._send(200, "<meta charset='utf-8'><p>Aktualizácia katalógu z Upgates sa spustila. Potrvá asi "
                                    "3–5 minút, potom stránku e-shopu obnovte.</p>".encode("utf-8"), "text/html; charset=utf-8")
-        if url.path in ("/report", "/report/not-found.csv", "/report/demand.csv"):
+        if url.path in ("/report", "/report/not-found.csv", "/report/demand.csv", "/report/searches.csv"):
             qs = parse_qs(url.query)
             token = qs.get("token", [""])[0]
             if not _token_ok(token):
@@ -356,7 +356,9 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 return self._send(400, {"error": "week must look like 2026-W45"})
             if url.path.endswith(".csv"):
-                body = analytics.demand_csv(report) if "demand" in url.path else analytics.not_found_csv(report)
+                body = (analytics.demand_csv(report) if "demand" in url.path
+                        else analytics.searches_csv(report) if "searches" in url.path
+                        else analytics.not_found_csv(report))
                 return self._send(200, body.encode("utf-8"), "text/csv; charset=utf-8", cache="no-store")
             page = analytics.render_html(report, STORE.domains, "/report", token)
             return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8", cache="no-store")

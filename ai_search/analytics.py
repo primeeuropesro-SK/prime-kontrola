@@ -136,6 +136,9 @@ def summarize(searches, products=None, top=20):
 
         query_counts = Counter(s["qf"] for s in ss)
         query_ok = Counter(s["qf"] for s in ok)
+        query_last = {}
+        for s in ss:
+            query_last[s["qf"]] = max(query_last.get(s["qf"], 0), s["t"])
         catalog = products.get(lang, {})
         out[lang] = {
             "searches": len(ss),
@@ -151,13 +154,18 @@ def summarize(searches, products=None, top=20):
                 for pid, n in clicks.most_common(top)
             ],
             "top_queries": [
-                {"q": display[q], "count": n, "success_rate": _pct(query_ok[q], n)}
+                {"q": display[q], "count": n, "success_rate": _pct(query_ok[q], n), "last": query_last[q]}
                 for q, n in query_counts.most_common(top)
             ],
             "not_found": top_queries(zero, 50),
             "not_found_all": top_queries(zero, 500),
             # every unfound search with its date and time, newest first (for the CSV)
             "not_found_events": [{"q": s["q"], "t": s["t"]} for s in sorted(zero, key=lambda s: -s["t"])[:5000]],
+            # every search with date, time and outcome, newest first (for the CSV)
+            "search_events": [
+                {"q": s["q"], "t": s["t"], "n": s["n"], "clicked": bool(s["clicks"]), "ai": s["ai"]}
+                for s in sorted(ss, key=lambda s: -s["t"])[:20000]
+            ],
             "no_click_queries": top_queries(no_click, top),
         }
     return out
@@ -283,7 +291,8 @@ td.n{{text-align:right;white-space:nowrap}} a{{color:#1f5fbf}} .cols{{display:gr
         parts.append(f'<p class="nav"><a href="{e(base_url)}?week={e(report["prev_week"])}{q}">← predchádzajúci týždeň</a>'
                      f'<a href="{e(base_url)}?week={e(report["next_week"])}{q}">nasledujúci týždeň →</a>'
                      f'<a href="{e(base_url)}/not-found.csv?week={e(report["week"])}{q}">hľadali a nenašli (CSV)</a>'
-                     f'<a href="{e(base_url)}/demand.csv?week={e(report["week"])}{q}">chýbajúce produkty (CSV)</a></p>')
+                     f'<a href="{e(base_url)}/demand.csv?week={e(report["week"])}{q}">chýbajúce produkty (CSV)</a>'
+                     f'<a href="{e(base_url)}/searches.csv?week={e(report["week"])}{q}">všetky vyhľadávania (CSV)</a></p>')
     if not report["langs"]:
         parts.append('<p class="empty">V tomto týždni nie sú zaznamenané žiadne vyhľadávania.</p>')
     for lang, r in report["langs"].items():
@@ -335,18 +344,32 @@ td.n{{text-align:right;white-space:nowrap}} a{{color:#1f5fbf}} .cols{{display:gr
                            [[f"<td>{e(x['q'])}</td>", f'<td class="n">{x["count"]}</td>',
                              f'<td class="n">{e(fmt_time(x.get("last")))}</td>'] for x in r["not_found"]]))
         parts.append("</div><div>")
-        parts.append(table("Našli, ale neklikli", ["Výraz", "Počet"],
-                           [[f"<td>{e(x['q'])}</td>", f'<td class="n">{x["count"]}</td>'] for x in r["no_click_queries"]]))
+        parts.append(table("Našli, ale neklikli", ["Výraz", "Počet", "Naposledy hľadané"],
+                           [[f"<td>{e(x['q'])}</td>", f'<td class="n">{x["count"]}</td>',
+                             f'<td class="n">{e(fmt_time(x.get("last")))}</td>'] for x in r["no_click_queries"]]))
         parts.append("</div></div>")
-        parts.append(table("Top 20 hľadaných výrazov", ["Výraz", "Počet", "Úspešnosť"],
-                           [[f"<td>{e(x['q'])}</td>", f'<td class="n">{x["count"]}</td>', f'<td class="n">{x["success_rate"]} %</td>']
-                            for x in r["top_queries"]]))
+        parts.append(table("Top 20 hľadaných výrazov", ["Výraz", "Počet", "Úspešnosť", "Naposledy hľadané"],
+                           [[f"<td>{e(x['q'])}</td>", f'<td class="n">{x["count"]}</td>', f'<td class="n">{x["success_rate"]} %</td>',
+                             f'<td class="n">{e(fmt_time(x.get("last")))}</td>'] for x in r["top_queries"]]))
     parts.append('<p class="sub" style="margin-top:28px">Úspešnosť = podiel vyhľadávaní, po ktorých zákazník klikol na produkt. '
                  '„Hľadali a nenašli“ = v e-shope nie je produkt, ktorý by obsahoval všetky hľadané slová '
                  '(preklepy a synonymá sa zohľadňujú). Tip: takéto výrazy doplňte do ai_search/synonyms.json, '
                  'do názvov či popisov produktov, alebo zvážte rozšírenie sortimentu.</p>'
                  "</main></body></html>")
     return "".join(parts)
+
+
+def searches_csv(report):
+    """Every search of the week with date, time and outcome."""
+    buf = io.StringIO()
+    w = csv.writer(buf, delimiter=";")
+    w.writerow(["krajina", "dátum", "čas", "hľadaný výraz", "výsledok", "AI"])
+    for lang, r in report["langs"].items():
+        for x in r.get("search_events", []):
+            date_s, time_s = fmt_time(x["t"]).split(" ")
+            outcome = "klik na produkt" if x["clicked"] else ("nenašli" if x["n"] == 0 else "bez kliku")
+            w.writerow([COUNTRY.get(lang, lang), date_s, time_s, x["q"], outcome, "áno" if x["ai"] else ""])
+    return "\ufeff" + buf.getvalue()
 
 
 def not_found_csv(report):
