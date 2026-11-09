@@ -20,6 +20,17 @@ RERANK_CANDIDATES = int(os.environ.get("AI_RERANK_CANDIDATES", "25"))
 FALLBACK_MODELS = {"claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"}
 
 LANG_NAMES = {"sk": "slovenčina", "hu": "maďarčina (magyar)", "cs": "čeština", "en": "English"}
+# Said in the customer's own language, so the AI does not drift into the (Slovak) prompt language.
+ANSWER_IN = {
+    "sk": "Vetu summary napíš po slovensky.",
+    "hu": "Vetu summary napíš VÝHRADNE po maďarsky. Az összefoglaló mondatot kizárólag magyarul írd meg.",
+    "cs": "Vetu summary napíš po česky. Shrnutí napiš česky.",
+}
+REASONS_IN = {
+    "sk": "Dôvody napíš po slovensky.",
+    "hu": "Dôvody (reason) napíš VÝHRADNE po maďarsky. Az indoklást kizárólag magyarul írd.",
+    "cs": "Dôvody napíš po česky.",
+}
 
 try:
     import anthropic
@@ -130,7 +141,8 @@ class QueryAI:
             f"Kategórie katalógu: {json.dumps(index.categories, ensure_ascii=False)}\n"
             f"Výrobcovia: {json.dumps(index.manufacturers, ensure_ascii=False)}"
         ) + _owner_rules(instructions)
-        user = f"Jazyk katalógu: {LANG_NAMES.get(lang, lang)}\nDopyt zákazníka: {query}"
+        user = (f"Jazyk katalógu a zákazníka: {LANG_NAMES.get(lang, lang)}\nDopyt zákazníka: {query}\n"
+                + ANSWER_IN.get(lang, f"Vetu summary napíš v jazyku: {LANG_NAMES.get(lang, lang)}."))
         try:
             result = self._call(system, user, schema, max_tokens=2000)
         except Exception as e:  # never break search because of the AI step
@@ -289,7 +301,9 @@ class QueryAI:
             "zjavne nesedia. Ku každému napíš krátky dôvod (max 12 slov) v jazyku zákazníka. "
             "Nevymýšľaj vlastnosti, ktoré nie sú v údajoch."
         ) + _owner_rules(instructions)
-        user = f"Dopyt: {query}\nJazyk: {LANG_NAMES.get(lang, lang)}\nKandidáti:\n{json.dumps(listing, ensure_ascii=False)}"
+        user = (f"Dopyt: {query}\nJazyk zákazníka: {LANG_NAMES.get(lang, lang)}\n"
+                + REASONS_IN.get(lang, f"Dôvody napíš v jazyku: {LANG_NAMES.get(lang, lang)}.")
+                + f"\nKandidáti:\n{json.dumps(listing, ensure_ascii=False)}")
         try:
             result = self._call(system, user, schema, max_tokens=3000)
         except Exception as e:

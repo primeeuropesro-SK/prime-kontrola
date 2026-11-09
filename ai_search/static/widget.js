@@ -620,7 +620,12 @@
       if (!input.value.trim()) ctl.search("", false);
     });
     input.addEventListener("click", function (e) { if (isPhone()) openPhone(e); });
-    document.addEventListener("click", function (e) { if (e.target !== input && !panel.contains(e.target)) panel.style.display = "none"; });
+    document.addEventListener("click", function (e) {
+      // A click inside the panel may already have replaced what was clicked (e.g. the AI button
+      // turned into the AI loader); such a detached target is not a click outside the panel.
+      if (!e.target.isConnected) return;
+      if (e.target !== input && !panel.contains(e.target)) panel.style.display = "none";
+    });
     window.addEventListener("resize", function () { if (panel.style.display !== "none") place(); });
   }
 
