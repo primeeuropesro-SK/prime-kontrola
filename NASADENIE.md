@@ -13,16 +13,23 @@ jednotky dolárov). Ceny sa môžu meniť, overte ich na render.com/pricing a cl
 1. Otvorte **https://console.anthropic.com** a zaregistrujte sa (firemný e-mail).
 2. **Settings → Billing**: zadajte platobnú kartu a kúpte kredit, napr. 10 $.
 3. **Settings → Limits**: nastavte mesačný limit míňania (napr. 20 $), aby náklady nikdy neprekročili rozpočet.
-4. **Settings → API Keys → Create Key**, pomenujte ho `primework-search`.
+4. **Settings → API Keys → Create Key**, pomenujte ho `primework-search`. Pri **Expires** zvoľte
+   **Never** (alebo najdlhšiu dobu), inak kľúč po 30 dňoch prestane fungovať.
 5. Skopírujte kľúč (začína `sk-ant-…`) a uložte si ho bezpečne. Zobrazí sa len raz.
    Kľúč nikomu neposielajte e-mailom ani do chatu.
 
 ## Krok 2 – API prístup do Upgates (5 min)
 
-1. V administrácii Upgates: **Nastavenia → Import / Export → záložka Ostatné** (API).
-2. Ak API nie je zapnuté, zapnite ho. Stačí oprávnenie na **čítanie produktov a jazykov**.
-3. Skopírujte **API login** a **API kľúč (heslo)**.
-4. Adresa API pre váš obchod je `https://prime-work.admin.s35.upgates.com/api/v2` (už je prednastavená).
+1. Otvorte v administrácii **Nastavenia → Export / Import → API**:
+   `https://prime-work.admin.s35.upgates.com/setup/export-import/api/`
+2. Existujúce prístupy nemeňte ani nemažte, môžu ich používať iné napojenia.
+3. Kliknite na pridanie nového prístupu (**+ Nový** / **Pridať**).
+4. **Názov:** `AI vyhladavanie`. **Oprávnenia:** iba **čítanie** pre **Produkty** a **Jazyky**
+   (žiadny zápis, objednávky ani zákazníci).
+5. Kliknite **Uložiť**.
+6. Z riadku nového prístupu v tabuľke skopírujte **Login** (`UPGATES_LOGIN`) a **API kľúč**
+   (`UPGATES_API_KEY`, najprv ho zobrazte). Skontrolujte, či **URL** je
+   `https://prime-work.admin.s35.upgates.com/api/v2`.
 
 ## Krok 3 – Server na Render.com (10 min)
 
