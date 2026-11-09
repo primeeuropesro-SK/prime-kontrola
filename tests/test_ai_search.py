@@ -280,6 +280,11 @@ class AnalyticsTests(unittest.TestCase):
         self.assertIn("kombinezon", csv_text)
         self.assertRegex(csv_text, r"Slovensko;\d\d\.\d\d\.\d{4};\d\d:\d\d;kombinezon")
         self.assertIn("Naposledy hľadané", page)
+        self.assertIn("Top 20 hľadaných výrazov", page)
+        self.assertGreater(rep["langs"]["sk"]["top_queries"][0]["last"], 0)
+        all_csv = analytics.searches_csv(rep)
+        self.assertRegex(all_csv, r"Slovensko;\d\d\.\d\d\.\d{4};\d\d:\d\d;kombinezon;nenašli;")
+        self.assertIn(";klik na produkt;", all_csv)
         self.assertEqual(analytics.week_range(week)[0], today - timedelta(days=today.weekday()))
 
 
