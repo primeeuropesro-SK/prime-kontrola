@@ -127,8 +127,20 @@
     catch (e) { return v + " " + (cur || ""); }
   }
   function debounce(fn, ms) {
-    var h; return function () { var a = arguments, s = this; clearTimeout(h); h = setTimeout(function () { fn.apply(s, a); }, ms); };
+    var h;
+    var d = function () { var a = arguments, s = this; clearTimeout(h); h = setTimeout(function () { fn.apply(s, a); }, ms); };
+    d.cancel = function () { clearTimeout(h); };
+    return d;
   }
+  // When the widget takes over Enter, the shop template's own search must not submit the form
+  // (it would navigate away before the AI answer appears).
+  var submitBlock = { form: null, until: 0 };
+  document.addEventListener("submit", function (e) {
+    if (submitBlock.form && e.target === submitBlock.form && Date.now() < submitBlock.until) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    }
+  }, true);
   // Bold the words of `text` that match what the customer typed (diacritics-insensitive).
   function highlight(text, query) {
     var qs = fold(query).split(/[^a-z0-9]+/).filter(function (w) { return w.length >= 2; });
@@ -304,7 +316,7 @@
   /* Binds one text field to one results box. Used for the desktop panel (field = the shop's
    * own input) and for the phone full-screen search (field = the overlay's input). */
   function controller(field, box, o) {
-    var seq = 0, active = -1, lastQuery = null, lastData = null, idle = null;
+    var seq = 0, active = -1, lastQuery = null, lastData = null, idle = null, aiQuery = null, enterAt = 0;
 
     function setActive(i, items) {
       active = i;
@@ -330,6 +342,7 @@
     function search(q, ai) {
       var my = ++seq;
       stopSteps();
+      aiQuery = ai ? q : null;
       var ctrl = window.AbortController ? new AbortController() : null;
       var timeout = null;
       if (ai) {
@@ -350,6 +363,7 @@
         clearTimeout(timeout);
         if (my !== seq) return; // a newer query is already running
         stopSteps();
+        aiQuery = null;
         lastData = data;
         if (ai && !data.ai && !data.error) toast(t.aiSlow);
         show(q ? renderResults(data, ai && !!data.ai, o.compact, !!o.form()) : renderEmpty(data, o.compact));
@@ -361,6 +375,7 @@
         clearTimeout(timeout);
         if (my !== seq) return;
         stopSteps();
+        aiQuery = null;
         if (ai) { toast(t.aiSlow); search(q, false); } // fall back to the instant results, never a blank panel
       });
     }
@@ -380,13 +395,40 @@
     var instant = debounce(function () {
       var q = field.value;
       if (q === lastQuery) return;
+      if (aiQuery !== null && q.trim() === aiQuery) return; // the AI is already answering exactly this
       lastQuery = q;
       if (!q.trim()) return search("", false);
       if (q.trim().length < 2) { seq++; return o.compact ? search("", false) : o.hide(); }
       search(q, false);
     }, 120);
 
+    function startAi(q) {
+      instant.cancel();          // a pending as-you-type search must not replace the AI loader
+      lastQuery = field.value;
+      track("ai", q);
+      search(q, true);
+    }
+    function enter() {
+      var q = field.value.trim();
+      if (ENTER_MODE === "ai" && q.length >= 3) { startAi(q); return true; }
+      if (o.compact && q) { submitAll(); return true; }
+      return false;
+    }
+    function takeOverEnter(e) {
+      e.preventDefault();
+      e.stopImmediatePropagation(); // the template's own Enter handler must not run
+      enterAt = Date.now();
+      submitBlock.form = field.form;
+      submitBlock.until = Date.now() + 1500;
+    }
+
     field.addEventListener("input", instant);
+    // Some templates react on keypress / keyup instead of keydown - swallow those too.
+    ["keypress", "keyup"].forEach(function (type) {
+      field.addEventListener(type, function (e) {
+        if (e.key === "Enter" && Date.now() - enterAt < 800) { e.preventDefault(); e.stopImmediatePropagation(); }
+      }, true);
+    });
     field.addEventListener("keydown", function (e) {
       var items = Array.prototype.slice.call(box.querySelectorAll(".pas-nav"));
       var open = o.isOpen();
@@ -398,16 +440,15 @@
         e.preventDefault();
         applyQuery(lastData.suggestions[0] + " ");
       } else if (e.key === "Enter") {
-        if (active >= 0 && items[active]) { e.preventDefault(); items[active].click(); return; }
+        if (active >= 0 && items[active]) { takeOverEnter(e); items[active].click(); return; }
         var q = field.value.trim();
-        if (ENTER_MODE === "ai" && q.length >= 3) { e.preventDefault(); track("ai", q); search(q, true); }
-        else if (o.compact && q) { e.preventDefault(); submitAll(); }
+        if ((ENTER_MODE === "ai" && q.length >= 3) || (o.compact && q)) { takeOverEnter(e); enter(); }
       } else if (e.key === "Escape") { o.close(); }
-    });
+    }, true); // capture: runs before the template's own listeners on the same field
     box.addEventListener("mousedown", function (e) { if (!o.compact) e.preventDefault(); }); // keep focus in the input
     box.addEventListener("click", function (e) {
       var el;
-      if ((el = e.target.closest("[data-pas-ai]"))) { e.preventDefault(); track("ai", field.value); search(field.value.trim(), true); if (!o.compact) field.focus(); return; }
+      if ((el = e.target.closest("[data-pas-ai]"))) { e.preventDefault(); startAi(field.value.trim()); if (!o.compact) field.focus(); return; }
       if ((el = e.target.closest("[data-pas-q]"))) { e.preventDefault(); applyQuery(el.getAttribute("data-pas-q")); if (o.compact) field.blur(); return; }
       if ((el = e.target.closest("[data-pas-all]"))) { e.preventDefault(); submitAll(); return; }
       if ((el = e.target.closest("[data-pas-fb]"))) {
@@ -434,7 +475,8 @@
 
     return {
       refresh: function () { lastQuery = null; instant(); },
-      search: search
+      search: search,
+      enter: enter
     };
   }
 
@@ -446,9 +488,9 @@
     ov.className = "pas-ov";
     ov.style.display = "none";
     ov.setAttribute("role", "dialog");
-    ov.innerHTML = '<div class="pas-ovh"><input type="search" enterkeyhint="search" autocomplete="off" autocorrect="off" ' +
-      'autocapitalize="off" spellcheck="false" placeholder="' + esc(t.placeholder) + '">' +
-      '<button type="button" class="pas-x" aria-label="' + esc(t.close) + '">✕</button></div><div class="pas-ovb"></div>';
+    ov.innerHTML = '<form class="pas-ovh" action="#" role="search"><input type="search" enterkeyhint="search" autocomplete="off" ' +
+      'autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="' + esc(t.placeholder) + '">' +
+      '<button type="button" class="pas-x" aria-label="' + esc(t.close) + '">✕</button></form><div class="pas-ovb"></div>';
     var field = ov.querySelector("input"), box = ov.querySelector(".pas-ovb");
     field.__pas = true; // never treat our own field as a shop search box
     document.body.appendChild(ov);
@@ -476,6 +518,8 @@
       }
     });
     ov.querySelector(".pas-x").addEventListener("click", function () { close(false); });
+    // Phone keyboards' "Search / Go" key submits this form even when it sends no Enter keydown.
+    ov.querySelector("form").addEventListener("submit", function (e) { e.preventDefault(); ctl.enter(); });
     // Scrolling the results hides the keyboard, so customers see more products.
     box.addEventListener("touchstart", function () { field.blur(); }, { passive: true });
     window.addEventListener("popstate", function () { close(true); }); // phone Back button closes the search

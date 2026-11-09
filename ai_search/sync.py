@@ -57,10 +57,15 @@ def normalize_product(p, lang, domain=""):
     price, currency = _price(p, lang)
     variants = p.get("variants") or []
     variant_labels, variant_codes, prices = [], [], []
+    variants = [v for v in variants if v.get("active_yn") is not False]  # inactive sizes do not count
+    variant_info = {}  # variant code / EAN -> [availability, in stock, price] of that exact size
     for v in variants:
-        if v.get("active_yn") is False:
-            continue
-        variant_codes += [x for x in (v.get("code"), v.get("ean")) if x]
+        v_in_stock = (v.get("stock") or 0) > 0 or v.get("availability_type") == "InStock"
+        v_price, _ = _price(v, lang)
+        for x in (v.get("code"), v.get("ean")):
+            if x:
+                variant_codes.append(x)
+                variant_info[str(x)] = [v.get("availability"), v_in_stock, v_price]
         vd = _desc(v, lang)
         label = vd.get("title") or ""
         params = " ".join(
@@ -77,9 +82,15 @@ def normalize_product(p, lang, domain=""):
         price = min(prices)
     stock = p.get("stock")
     if variants:
-        in_stock = any((v.get("stock") or 0) > 0 or v.get("availability_type") == "InStock" for v in variants)
+        in_stock = any(info[1] for info in variant_info.values())
     else:
         in_stock = (stock or 0) > 0 or p.get("availability_type") == "InStock"
+    # Availability text: from the product, else from a size that is in stock (not just the first size).
+    availability = p.get("availability")
+    if not availability and variants:
+        stocked = [info[0] for info in variant_info.values() if info[1] and info[0]]
+        any_text = [info[0] for info in variant_info.values() if info[0]]
+        availability = (stocked or any_text or [None])[0]
     url = d.get("url") or ""
     if url and not url.startswith("http"):
         url = domain.rstrip("/") + "/" + url.lstrip("/")
@@ -99,7 +110,8 @@ def normalize_product(p, lang, domain=""):
         "price_max": max(prices) if prices else price,
         "currency": currency,
         "in_stock": bool(in_stock),
-        "availability": p.get("availability") or next((v.get("availability") for v in variants if v.get("availability")), None),
+        "availability": availability,
+        "variant_info": variant_info,
         "image": _image(p),
         "url": url,
     }
