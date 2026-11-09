@@ -345,6 +345,75 @@ class LocalizeTests(unittest.TestCase):
         self.assertEqual(sk["products"][0]["categories"], ["Oblečenie"])
 
 
+class RulesTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from ai_search.rules import Rules
+        self.rules = Rules(os.path.join(tempfile.mkdtemp(), "rules.json"))
+        self.docs = [d for d in (normalize_product(p, "sk") for p in RAW) if d]
+        self.by_id = {d["id"]: d for d in self.docs}
+
+    def test_pin_and_hide_apply_to_queries_containing_all_words(self):
+        self.rules.add_pin("sk", "zimné rukavice", 2)
+        self.rules.add_hide("sk", "rukavice", 1)
+        docs, pinned = self.rules.apply("sk", "zimne rukavice do 10 €", list(self.docs), self.by_id)
+        self.assertEqual(docs[0]["id"], 2)
+        self.assertNotIn(1, [d["id"] for d in docs])
+        self.assertEqual(pinned, {2})
+        docs, _ = self.rules.apply("sk", "vesta", list(self.docs), self.by_id)  # other query: untouched
+        self.assertEqual([d["id"] for d in docs], [d["id"] for d in self.docs])
+        docs, _ = self.rules.apply("hu", "zimne rukavice", list(self.docs), self.by_id)  # other language
+        self.assertEqual(docs[0]["id"], self.docs[0]["id"])
+
+    def test_instructions_ratings_persist_and_delete(self):
+        from ai_search.rules import Rules
+        r = self.rules.add_instruction("sk", "  Pri slove zimné uprednostni zateplené.  ")
+        self.rules.rate("abc", "bad", "ukázalo letné")
+        again = Rules(self.rules.path)
+        self.assertEqual(again.instructions("sk"), ["Pri slove zimné uprednostni zateplené."])
+        self.assertEqual(again.rating("abc")["note"], "ukázalo letné")
+        v1 = again.version("sk")
+        again.remove(r["id"])
+        self.assertEqual(again.instructions("sk"), [])
+        self.assertNotEqual(again.version("sk"), v1)
+
+    def test_owner_instruction_reaches_the_ai(self):
+        docs = [d for d in (normalize_product(p, "sk") for p in RAW) if d]
+        fake = FakeAnthropic([{"keywords": ["rukavice"], "categories": [], "manufacturers": [], "min_price": None,
+                               "max_price": None, "in_stock_only": False, "summary": "x"}] * 2)
+        q = ai_mod.QueryAI(client=fake)
+        q.understand("rukavice", "sk", SearchIndex(docs), instructions=("Uprednostni zateplené.",))
+        self.assertIn("Uprednostni zateplené.", fake.calls[0]["system"][0]["text"])
+        q.understand("rukavice", "sk", SearchIndex(docs), instructions=("Iný pokyn.",))  # new rule -> no stale cache
+        self.assertEqual(len(fake.calls), 2)
+
+
+class AdminPagesTests(unittest.TestCase):
+    def test_answers_joined_with_clicks_feedback_and_rating(self):
+        import tempfile
+        from ai_search import admin_pages, analytics
+        from ai_search.rules import Rules, answer_key
+        log = analytics.EventLog(tempfile.mkdtemp())
+        rules = Rules(os.path.join(tempfile.mkdtemp(), "rules.json"))
+        log.append({"type": "ai_result", "lang": "sk", "q": "Topánky do 40 €", "sid": "s1", "ok": True,
+                    "summary": "Hľadám obuv", "keywords": ["poltopánka"], "filters": {"max_price": 40},
+                    "products": [[4, "S1P do 40 €"], [3, "S3"]], "pinned": []})
+        log.append({"type": "click", "lang": "sk", "q": "topánky do 40 €", "sid": "s1", "pid": 4})
+        log.append({"type": "ai_feedback", "lang": "sk", "q": "topánky do 40 €", "sid": "s1", "v": "up"})
+        today = analytics.now_local().date()
+        answers = admin_pages.ai_answers(log, today, today, rules)
+        self.assertEqual((answers[0]["clicked"], answers[0]["customer"]), ({4}, "up"))
+        rules.rate(answers[0]["key"], "good")
+        answers = admin_pages.ai_answers(log, today, today, rules)
+        self.assertEqual(answers[0]["owner"]["rating"], "good")
+        page = admin_pages.render_ai_page(answers, analytics.iso_week(today), {"sk": {4: ("Reis S1P", "https://shop/p/4")}}, "tok", "all")
+        self.assertIn("Reis S1P", page)
+        self.assertIn("Pripnúť", page)
+        self.assertIn("👍 zákazníkovi pomohlo", page)
+        self.assertIn("Pravidlá a pokyny", admin_pages.render_rules_page(rules, {}, "tok", ["sk"]))
+        self.assertEqual(answer_key(answers[0]), answers[0]["key"])
+
+
 class TokenTests(unittest.TestCase):
     def test_plus_in_token_survives_url(self):
         from urllib.parse import parse_qs

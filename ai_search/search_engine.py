@@ -168,6 +168,7 @@ class SearchIndex:
                 if key:
                     self.exact[fold(str(key))] = i
         self.vocab = sorted(self.postings)
+        self.by_id = {d["id"]: d for d in docs}
         # Typo tolerance: spelling-normalised vocabulary + SymSpell-style delete index.
         self.canon_terms = defaultdict(list)  # canon form -> original terms
         for term in self.vocab:

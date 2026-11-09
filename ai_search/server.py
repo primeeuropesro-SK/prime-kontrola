@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ai_search import analytics, mailer, sync, synonyms  # noqa: E402
+from ai_search import admin_pages, analytics, mailer, rules, sync, synonyms  # noqa: E402
 from ai_search.ai import QueryAI  # noqa: E402
 from ai_search.search_engine import SearchIndex, tokenize  # noqa: E402
 
@@ -105,12 +105,13 @@ class Store:
         with self.lock:
             return self.indexes.get(lang) or next(iter(self.indexes.values()), None)
 
-    def search(self, q, lang, limit, use_ai):
+    def search(self, q, lang, limit, use_ai, sid=""):
         idx = self.index(lang)
         if idx is None:
             return {"error": "catalog not loaded"}
         t0 = time.time()
-        ai_info = self.ai.understand(q, lang, idx) if use_ai else None
+        instructions = RULES.instructions(lang)
+        ai_info = self.ai.understand(q, lang, idx, instructions=instructions) if use_ai else None
         filters, extra = {}, None
         if ai_info:
             filters = {
@@ -129,17 +130,31 @@ class Store:
 
         reasons = {}
         if ai_info and docs:
-            ranked = self.ai.rerank(q, lang, docs, limit)
+            ranked = self.ai.rerank(q, lang, docs, limit, instructions=instructions)
             if ranked:
                 by_id = {d["id"]: d for d in docs}
                 reasons = dict(ranked)
                 docs = [by_id[i] for i, _ in ranked if i in by_id] or docs
+        # The owner's corrections from the report: pinned products first, hidden ones removed.
+        docs, pinned = RULES.apply(lang, q, docs, idx.by_id)
         products = []
         for d in docs[:limit]:
             item = {k: d.get(k) for k in PUBLIC_FIELDS}
             if d["id"] in reasons:
                 item["reason"] = reasons[d["id"]]
             products.append(item)
+        if use_ai:
+            # Every AI answer is kept for the owner to review in /report/ai.
+            try:
+                EVENTS.append({
+                    "type": "ai_result", "lang": lang, "q": q, "sid": sid[:16], "ok": bool(ai_info),
+                    "summary": (ai_info or {}).get("summary"), "keywords": (ai_info or {}).get("keywords"),
+                    "filters": {k: v for k, v in filters.items() if v},
+                    "products": [[p["id"], p.get("reason", "")] for p in products],
+                    "pinned": sorted(pinned),
+                })
+            except OSError as e:
+                log.warning("cannot write AI answer: %s", e)
         return {
             "query": q,
             "lang": lang,
@@ -207,6 +222,7 @@ class Popular:
 STORE = Store()
 POPULAR = Popular(os.path.join(sync.DATA_DIR, "popular.json"))
 EVENTS = analytics.EventLog(os.path.join(sync.DATA_DIR, "events"))
+RULES = rules.Rules(os.path.join(sync.DATA_DIR, "rules.json"))
 _track_rate = defaultdict(deque)
 
 
@@ -283,6 +299,22 @@ class Handler(BaseHTTPRequestHandler):
         fwd = self.headers.get("X-Forwarded-For")
         return fwd.split(",")[0].strip() if fwd else self.client_address[0]
 
+    def _admin_action(self):
+        length = min(int(self.headers.get("Content-Length") or 0), 20000)
+        form = parse_qs(self.rfile.read(length).decode("utf-8", "replace"))
+        if not _token_ok(form.get("token", [""])[0]):
+            return self._send(403, b"<h1>403</h1><p>Chyba alebo chybny token.</p>", "text/html; charset=utf-8")
+        error = _handle_admin_action(form)
+        if error:
+            return self._send(400, f"<meta charset='utf-8'><p>{error}</p><p><a href='javascript:history.back()'>← späť</a></p>"
+                              .encode("utf-8"), "text/html; charset=utf-8")
+        back = form.get("back", ["/report"])[0]
+        if not back.startswith("/report"):
+            back = "/report"
+        self.send_response(303)
+        self.send_header("Location", back)
+        self.end_headers()
+
     def do_OPTIONS(self):
         self.send_response(204)
         self._cors()
@@ -308,7 +340,7 @@ class Handler(BaseHTTPRequestHandler):
                     "popular": POPULAR.top(lang),
                     "categories": idx.top_categories() if idx else [],
                 }, cache="no-store")
-            result = STORE.search(q, lang, limit, use_ai and not ai_limited)
+            result = STORE.search(q, lang, limit, use_ai and not ai_limited, (qs.get("sid", [""])[0] or ""))
             if ai_limited:
                 result["ai_rate_limited"] = True
             return self._send(200 if "error" not in result else 503, result, cache="no-store")
@@ -318,9 +350,18 @@ class Handler(BaseHTTPRequestHandler):
             lang = qs.get("lang", ["sk"])[0][:5]
             q = (qs.get("q", [""])[0] or "").strip()[:100]
             kind = qs.get("type", ["enter"])[0]
-            kind = kind if kind in analytics.EVENT_TYPES else "all"
             ip = self._client_ip()
             idx = STORE.index(lang)
+            if kind == "ai_feedback":
+                vote = qs.get("v", [""])[0]
+                if q and vote in ("up", "down") and _track_allowed(ip):
+                    EVENTS.append({"type": "ai_feedback", "lang": lang, "q": q, "v": vote,
+                                   "sid": (qs.get("sid", [""])[0] or "")[:16]})
+                self.send_response(204)
+                self._cors()
+                self.end_headers()
+                return
+            kind = kind if kind in analytics.EVENT_TYPES else "all"
             if q and idx is not None and _track_allowed(ip):
                 event = {"type": kind, "lang": lang, "q": q, "sid": (qs.get("sid", [""])[0] or "")[:16],
                          "n": idx.strict_count(q)}
@@ -346,6 +387,24 @@ class Handler(BaseHTTPRequestHandler):
             threading.Thread(target=_initial_sync, daemon=True).start()
             return self._send(200, "<meta charset='utf-8'><p>Aktualizácia katalógu z Upgates sa spustila. Potrvá asi "
                                    "3–5 minút, potom stránku e-shopu obnovte.</p>".encode("utf-8"), "text/html; charset=utf-8")
+        if url.path in ("/report/ai", "/report/rules"):
+            qs = parse_qs(url.query)
+            token = qs.get("token", [""])[0]
+            if not _token_ok(token):
+                return self._send(403, b"<h1>403</h1><p>Chyba alebo chybny token.</p>", "text/html; charset=utf-8")
+            products = STORE.products_by_id()
+            if url.path == "/report/ai":
+                week = qs.get("week", [None])[0] or analytics.iso_week(analytics.now_local().date())
+                try:
+                    start, end = analytics.week_range(week)
+                except ValueError:
+                    return self._send(400, {"error": "week must look like 2026-W45"})
+                flt = qs.get("filter", ["all"])[0]
+                answers = admin_pages.ai_answers(EVENTS, start, end, RULES)
+                page = admin_pages.render_ai_page(answers, week, products, token, flt, STORE.domains)
+            else:
+                page = admin_pages.render_rules_page(RULES, products, token, sorted(products) or ["sk"])
+            return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8", cache="no-store")
         if url.path in ("/report", "/report/not-found.csv", "/report/demand.csv", "/report/searches.csv"):
             qs = parse_qs(url.query)
             token = qs.get("token", [""])[0]
@@ -371,6 +430,8 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, {"error": "not found"})
 
     def do_POST(self):
+        if urlparse(self.path).path == "/admin/action":
+            return self._admin_action()
         if urlparse(self.path).path == "/admin/sync":
             if not ADMIN_TOKEN or self.headers.get("X-Admin-Token") != ADMIN_TOKEN:
                 return self._send(403, {"error": "forbidden"})
@@ -389,6 +450,44 @@ def _sync_loop():
             STORE.sync_now()
         except Exception as e:
             log.warning("periodic sync failed: %s", e)
+
+
+def _resolve_product(idx, form):
+    """Product id from the form: an explicit pid, or a product code / EAN typed by the owner."""
+    pid = form.get("pid", [""])[0]
+    if pid.isdigit():
+        return int(pid)
+    code = (form.get("code", [""])[0] or "").strip()
+    if idx is not None and code:
+        from ai_search.search_engine import fold as _fold
+        i = idx.exact.get(_fold(code))
+        if i is not None:
+            return idx.docs[i]["id"]
+    return None
+
+
+def _handle_admin_action(form):
+    """Apply one owner action from /report/ai or /report/rules. Returns an error text or None."""
+    action = form.get("action", [""])[0]
+    lang = form.get("lang", ["sk"])[0][:5]
+    q = (form.get("q", [""])[0] or "").strip()
+    if action == "rate":
+        RULES.rate(form.get("key", [""])[0][:32], form.get("rating", [""])[0], form.get("note", [""])[0])
+    elif action == "instruction":
+        if not RULES.add_instruction(lang, form.get("text", [""])[0]):
+            return "Pokyn je prázdny."
+    elif action in ("pin", "hide"):
+        pid = _resolve_product(STORE.index(lang), form)
+        if pid is None:
+            return "Produkt s týmto kódom sme v katalógu nenašli."
+        if not q:
+            return "Chýba výraz, pre ktorý má pravidlo platiť."
+        (RULES.add_pin if action == "pin" else RULES.add_hide)(lang, q, pid)
+    elif action == "delete":
+        RULES.remove(form.get("rule_id", [""])[0])
+    else:
+        return "Neznáma akcia."
+    return None
 
 
 def _weekly_loop():
