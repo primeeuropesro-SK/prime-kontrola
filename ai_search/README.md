@@ -29,6 +29,10 @@ e-shop (widget.js) ──▶ /api/search ─────────────
   Po kliknutí do prázdneho poľa ukáže populárne vyhľadávania a obľúbené kategórie. Populárne sa
   zobrazia až keď výraz hľadali aspoň 3 rôzni návštevníci a obsahuje iba slová z katalógu.
   Odkazy na kategórie potrebujú v Upgates API právo **Kategórie → Iba čítanie**.
+- **Mobil:** po ťuknutí do vyhľadávania sa otvorí vyhľadávanie cez celú obrazovku (pole hore, ✕ vpravo).
+  Tlačidlo Späť na telefóne ho zavrie a zákazník ostane na tej istej stránke. Najviac 4 návrhy,
+  kategórie a značky v jednom vodorovnom páse, hneď pod nimi produkty. Pri posúvaní výsledkov sa
+  skryje klávesnica. Nezávisí od toho, kde má šablóna Upgates vyhľadávacie pole.
 - **Enter alebo tlačidlo „✨ Opýtať sa AI“** spustí AI vyhľadávanie: Claude premení voľný text na kľúčové slová
   v jazyku katalógu, vyberie kategórie, cenový rozsah a potom zoradí najlepších kandidátov.
 - Ak AI nie je dostupná (chýba kľúč, výpadok), vyhľadávanie funguje ďalej bez nej.
