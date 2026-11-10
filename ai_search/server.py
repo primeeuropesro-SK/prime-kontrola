@@ -9,11 +9,13 @@ Endpoints
   GET  /healthz                                 status
   POST /admin/sync   (header X-Admin-Token)     reload products from Upgates now
 """
+import gc
 import hashlib
 import hmac
 import json
 import logging
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -51,16 +53,19 @@ class Store:
 
     def __init__(self):
         self.indexes, self.meta, self.lock = {}, {}, threading.Lock()
+        self._sync_lock = threading.Lock()  # never two syncs at once (hourly + /admin/sync)
         self.domains = {}
         self.ai = QueryAI()
 
     def load(self, catalog):
         indexes = {lang: SearchIndex(data["products"], data) for lang, data in catalog["languages"].items()}
         with self.lock:
-            self.indexes = indexes
+            old, self.indexes = self.indexes, indexes
             self.meta = {"generated_at": catalog.get("generated_at"),
                          "products": {k: len(v.docs) for k, v in indexes.items()}}
         self.domains = {k: v.get("domain") for k, v in catalog["languages"].items()}
+        del old
+        gc.collect()
         log.info("catalog loaded: %s", self.meta["products"])
         self.apply_synonyms()
 
@@ -104,9 +109,21 @@ class Store:
             return {lang: {d["id"]: (d["title"], d.get("url")) for d in idx.docs} for lang, idx in self.indexes.items()}
 
     def sync_now(self):
-        catalog = sync.build_catalog()
-        sync.save_catalog(catalog)
-        self.load(catalog)
+        """Reload products from Upgates in a separate process: parsing the large API responses
+        there means all that memory goes back to the system when it exits (Python keeps freed
+        memory to itself, so doing it here every hour made the server grow until it was killed)."""
+        with self._sync_lock:
+            root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            done = subprocess.run([sys.executable, "-m", "ai_search.sync"], cwd=root, env=os.environ.copy(),
+                                  capture_output=True, text=True, timeout=1800)
+            for line in (done.stdout + done.stderr).strip().splitlines()[-6:]:
+                log.info("sync: %s", line)
+            if done.returncode != 0:
+                raise RuntimeError(f"catalogue sync failed (exit {done.returncode})")
+            catalog = sync.load_catalog()
+            self.load(catalog)
+            del catalog
+            gc.collect()
         self.refresh_synonyms()
 
     def index(self, lang):
