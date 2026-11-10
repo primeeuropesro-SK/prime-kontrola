@@ -142,6 +142,40 @@ def _is_meta_category(name):
     return any(w in n for w in _META_CATEGORY_WORDS)
 
 
+_SENT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def excerpt(text, query, limit=300):
+    """The 1-2 sentences of a product text that best match the customer's words, for the AI.
+
+    FAQ-aware: when a matching sentence is a question, its answer (the next sentence) comes
+    with it. Done locally, so the AI gets the useful part of long descriptions for few tokens.
+    """
+    q = [stem(canon(t)) for t in tokenize(query) if len(t) >= 3]
+    if not text or not q:
+        return ""
+    sents = [x.strip() for x in _SENT_RE.split(text) if x.strip()]
+    scored = []
+    for i, sent in enumerate(sents):
+        words = {canon(w) for w in tokenize(sent)}
+        hits = sum(1 for t in q if any(w.startswith(t) for w in words))
+        if hits:
+            scored.append((hits + (0.5 if sent.endswith("?") else 0), i))
+    out, used = [], set()
+    for _, i in sorted(scored, key=lambda x: (-x[0], x[1])):
+        part = [i] + ([i + 1] if sents[i].endswith("?") and i + 1 < len(sents) else [])
+        if used & set(part):
+            continue
+        chunk = " ".join(sents[j] for j in part)
+        if sum(len(c) for c in out) + len(chunk) > limit and out:
+            break
+        out.append(chunk[:limit])
+        used.update(part)
+        if len(out) >= 2:
+            break
+    return " … ".join(out)[:limit]
+
+
 class SearchIndex:
     def __init__(self, docs, extras=None, k1=1.2, b=0.75):
         """docs: list of dicts produced by sync.normalize_product().
@@ -152,6 +186,7 @@ class SearchIndex:
         self.doc_len = []
         self.exact = {}  # folded code / ean -> doc_idx
         self.display = {}  # folded word -> how it is written in product titles (zimna -> zimná)
+        typo_terms = set()  # words customers misspell: from titles, categories, brands, short texts
         for i, d in enumerate(docs):
             for word in re.findall(r"\w+", d.get("title") or ""):
                 self.display.setdefault(fold(word), word.lower())
@@ -163,6 +198,8 @@ class SearchIndex:
                 for tok in tokenize(value):
                     self.postings[tok][i] = self.postings[tok].get(i, 0.0) + w
                     length += w
+                    if field != "long_description":
+                        typo_terms.add(tok)
             self.doc_len.append(length or 1.0)
             for key in (d.get("code"), d.get("ean"), *d.get("variant_codes", [])):
                 if key:
@@ -174,8 +211,10 @@ class SearchIndex:
         for term in self.vocab:
             self.canon_terms[canon(term)].append(term)
         self.canon_vocab = sorted(self.canon_terms)
+        # Typo index only for the product-describing words (titles, categories, brands, short texts):
+        # building it for every word of every long description cost ~30 MB per language.
         self.delete_index = defaultdict(set)
-        for c in self.canon_vocab:
+        for c in sorted({canon(t) for t in typo_terms}):
             if len(c) >= 4 and not c.isdigit():
                 for d in _deletes(c, 1):
                     self.delete_index[d].add(c)

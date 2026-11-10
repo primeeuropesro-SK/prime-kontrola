@@ -14,6 +14,7 @@
   "use strict";
   if (window.__primeAiSearch) return;
   window.__primeAiSearch = true;
+  window.primeAiSearchVersion = "2026-11-10.1"; // check in the browser console: primeAiSearchVersion
 
   var script = document.currentScript || document.querySelector('script[src*="widget.js"]');
   var ds = (script && script.dataset) || {};
@@ -32,7 +33,7 @@
           thinking: "AI hľadá najvhodnejšie produkty…",
           steps: ["Rozumiem, čo hľadáte…", "Prehľadávam celý katalóg…", "Vyberám najvhodnejšie produkty…", "Ešte chvíľku…"],
           aiSlow: "AI teraz neodpovedá, zobrazujem bežné výsledky.",
-          helped: "Pomohlo vám to?", thanks: "Ďakujeme za hodnotenie!", all: "Zobraziť všetky výsledky", none: "Nič sme nenašli. Skúste to opísať inak alebo sa opýtajte AI.",
+          helped: "Pomohlo vám to?", thanks: "Ďakujeme za hodnotenie!", working: "AI pracuje…", all: "Zobraziť všetky výsledky", none: "Nič sme nenašli. Skúste to opísať inak alebo sa opýtajte AI.",
           inStock: "Skladom", outStock: "Na objednávku", from: "od ", fixed: "Výsledky pre:",
           fav: "Pridať do obľúbených", cmp: "Pridať do porovnania", favDone: "Pridané do obľúbených",
           cmpDone: "Pridané do porovnania", actFail: "Nepodarilo sa, otváram produkt…",
@@ -42,7 +43,7 @@
           thinking: "Az AI keresi a legjobb termékeket…",
           steps: ["Értem, mit keresel…", "Átnézem a teljes kínálatot…", "Kiválasztom a legmegfelelőbb termékeket…", "Még egy pillanat…"],
           aiSlow: "Az AI most nem válaszol, a szokásos találatokat mutatom.",
-          helped: "Segített?", thanks: "Köszönjük az értékelést!", all: "Összes találat", none: "Nincs találat. Próbáld másképp leírni, vagy kérdezd az AI-t.",
+          helped: "Segített?", thanks: "Köszönjük az értékelést!", working: "Az AI dolgozik…", all: "Összes találat", none: "Nincs találat. Próbáld másképp leírni, vagy kérdezd az AI-t.",
           inStock: "Raktáron", outStock: "Rendelésre", from: "", fixed: "Találatok erre:",
           fav: "Kedvencekhez", cmp: "Összehasonlításhoz", favDone: "Hozzáadva a kedvencekhez",
           cmpDone: "Hozzáadva az összehasonlításhoz", actFail: "Nem sikerült, megnyitom a terméket…",
@@ -114,7 +115,11 @@
     ".pas-ovb{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}" +
     ".pas-ov .pas-s{min-height:46px;font-size:15px}.pas-ov .pas-item{min-height:72px}" +
     ".pas-ov .pas-ai{padding:8px 14px}" +
-    "html.pas-lock,html.pas-lock body{overflow:hidden!important}";
+    "html.pas-lock,html.pas-lock body{overflow:hidden!important}" +
+    ".pas-busy{position:absolute;z-index:100000;display:none;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;" +
+    "background:#fff8ec;border:1px solid #f3c27a;color:#b35c00;font:600 12px/1.2 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;" +
+    "box-shadow:0 2px 8px rgba(0,0,0,.12);pointer-events:none;white-space:nowrap}" +
+    ".pas-busy .pas-spin{width:13px;height:13px;margin:0}";
   var style = document.createElement("style");
   style.textContent = css;
   document.head.appendChild(style);
@@ -347,6 +352,7 @@
       var my = ++seq;
       stopSteps();
       aiQuery = ai ? q : null;
+      if (o.busy) o.busy(!!ai);
       var ctrl = window.AbortController ? new AbortController() : null;
       var timeout = null;
       if (ai) {
@@ -368,6 +374,7 @@
         if (my !== seq) return; // a newer query is already running
         stopSteps();
         aiQuery = null;
+        if (o.busy) o.busy(false);
         lastData = data;
         if (ai && !data.ai && !data.error) toast(t.aiSlow);
         show(q ? renderResults(data, ai && !!data.ai, o.compact, !!o.form()) : renderEmpty(data, o.compact));
@@ -380,6 +387,7 @@
         if (my !== seq) return;
         stopSteps();
         aiQuery = null;
+        if (o.busy) o.busy(false);
         if (ai) { toast(t.aiSlow); search(q, false); } // fall back to the instant results, never a blank panel
       });
     }
@@ -479,6 +487,7 @@
 
     return {
       refresh: function () { lastQuery = null; instant(); },
+      isBusy: function () { return aiQuery !== null; },
       search: search,
       enter: enter
     };
@@ -594,8 +603,24 @@
       panel.style.left = (left + window.scrollX) + "px";
       panel.style.width = width + "px";
     }
+    // "AI is working" badge drawn over the right end of the shop's own search field: visible
+    // even if something on the page hides our panel.
+    var busy = document.createElement("div");
+    busy.className = "pas-busy";
+    busy.setAttribute("role", "status");
+    busy.innerHTML = '<span class="pas-spin"></span>' + esc(t.working);
+    document.body.appendChild(busy);
+    function placeBusy() {
+      var r = input.getBoundingClientRect();
+      busy.style.top = (r.top + window.scrollY + r.height / 2 - 13) + "px";
+      busy.style.left = (r.right + window.scrollX - busy.offsetWidth - 40) + "px";
+    }
     var ctl = controller(input, panel, {
       compact: false,
+      busy: function (on) {
+        busy.style.display = on ? "flex" : "none";
+        if (on) { placeBusy(); place(); panel.style.display = "block"; }
+      },
       show: function () { place(); panel.style.display = "block"; },
       hide: function () { panel.style.display = "none"; },
       isOpen: function () { return panel.style.display !== "none"; },
@@ -624,9 +649,10 @@
       // A click inside the panel may already have replaced what was clicked (e.g. the AI button
       // turned into the AI loader); such a detached target is not a click outside the panel.
       if (!e.target.isConnected) return;
+      if (ctl.isBusy()) return; // keep the AI loader visible until the answer is there
       if (e.target !== input && !panel.contains(e.target)) panel.style.display = "none";
     });
-    window.addEventListener("resize", function () { if (panel.style.display !== "none") place(); });
+    window.addEventListener("resize", function () { if (panel.style.display !== "none") place(); if (ctl.isBusy()) placeBusy(); });
   }
 
   function init() { document.querySelectorAll(SELECTOR).forEach(attach); }

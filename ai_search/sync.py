@@ -101,7 +101,8 @@ def normalize_product(p, lang, domain=""):
         "variant_codes": variant_codes,
         "title": title,
         "short_description": strip_html(d.get("short_description")),
-        "long_description": strip_html(d.get("long_description"))[:3000],
+        # the whole description incl. FAQ (it used to be cut at 3000 chars, losing FAQs at the end)
+        "long_description": strip_html(d.get("long_description"))[:15000],
         "manufacturer": p.get("manufacturer") or "",
         "categories": [c["name"] for c in p.get("categories") or [] if c.get("name")],
         "category_ids": [c["category_id"] for c in p.get("categories") or [] if c.get("category_id")],
