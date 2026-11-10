@@ -26,7 +26,7 @@ from urllib.parse import parse_qs, urlparse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ai_search import admin_pages, analytics, mailer, rules, sync, synonyms  # noqa: E402
-from ai_search.ai import QueryAI  # noqa: E402
+from ai_search.ai import RERANK_CANDIDATES, QueryAI  # noqa: E402
 from ai_search.search_engine import SearchIndex, fold, tokenize  # noqa: E402
 
 log = logging.getLogger("ai_search")
@@ -147,7 +147,7 @@ class Store:
                 "in_stock_only": ai_info.get("in_stock_only"),
             }
             extra = ai_info.get("keywords")
-        pool = max(limit, 25) if ai_info else limit
+        pool = max(limit, RERANK_CANDIDATES) if ai_info else limit
         total, docs = idx.search(q, limit=pool, filters=filters, extra_terms=extra)
         if ai_info and total == 0 and any(filters.values()):
             # Filters were too strict (e.g. price) - fall back to keywords only.

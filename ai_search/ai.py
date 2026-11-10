@@ -9,12 +9,15 @@ import os
 import threading
 from collections import OrderedDict
 
+from ai_search.search_engine import excerpt
+
 log = logging.getLogger("ai_search.ai")
 
 MODEL = os.environ.get("AI_MODEL", "claude-haiku-5-5")  # cheapest; e.g. claude-sonnet-5-5 for higher quality
 EFFORT = os.environ.get("AI_EFFORT", "low")  # search must be quick; raise for better reasoning
 RERANK = os.environ.get("AI_RERANK", "1") == "1"
-RERANK_CANDIDATES = int(os.environ.get("AI_RERANK_CANDIDATES", "25"))
+# 15 candidates with a short relevant excerpt cost about as many tokens as 25 with 240 chars did.
+RERANK_CANDIDATES = int(os.environ.get("AI_RERANK_CANDIDATES", "15"))
 
 # Models that support the server-side refusal fallback (Claude Haiku 5.5 does not).
 FALLBACK_MODELS = {"claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"}
@@ -272,7 +275,9 @@ class QueryAI:
                 "categories": c.get("categories", [])[:4],
                 "price": c.get("price"),
                 "in_stock": c.get("in_stock"),
-                "info": (c.get("short_description") or c.get("long_description") or "")[:240],
+                "info": (c.get("short_description") or "")[:160],
+                # the sentences of the description / FAQ that relate to the query (picked locally)
+                "from_description": excerpt(c.get("long_description") or "", query, 300),
             }
             for c in candidates
         ]
@@ -299,7 +304,9 @@ class QueryAI:
             "Si predajca v e-shope s pracovným oblečením a OOPP. Z kandidátov vyber produkty, ktoré najlepšie "
             f"zodpovedajú dopytu zákazníka, zoradené od najvhodnejšieho (najviac {limit}). Vynechaj tie, ktoré "
             "zjavne nesedia. Ku každému napíš krátky dôvod (max 12 slov) v jazyku zákazníka. "
-            "Nevymýšľaj vlastnosti, ktoré nie sú v údajoch."
+            "Nevymýšľaj vlastnosti, ktoré nie sú v údajoch. Pole from_description obsahuje vety z popisu "
+            "produktu a z jeho FAQ, ktoré súvisia s dopytom – ak odpovedajú na to, čo zákazník chce, "
+            "zohľadni to a spomeň to v dôvode."
         ) + _owner_rules(instructions)
         user = (f"Dopyt: {query}\nJazyk zákazníka: {LANG_NAMES.get(lang, lang)}\n"
                 + REASONS_IN.get(lang, f"Dôvody napíš v jazyku: {LANG_NAMES.get(lang, lang)}.")

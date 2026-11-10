@@ -448,6 +448,28 @@ class OwnerSynonymTests(unittest.TestCase):
         self.assertNotIn("Pridať synonymum</button>", html_done)
 
 
+class ExcerptTests(unittest.TestCase):
+    def test_faq_question_comes_with_its_answer(self):
+        from ai_search.search_engine import excerpt
+        text = ("Kvalitné rukavice z lícovej kože. Vhodné na stavbu. FAQ – Často kladené otázky. "
+                "Môže sa rukavica prať v práčke? Nie, kožené rukavice by sa nemali prať v práčke. "
+                "Sú vhodné do zimy? Áno, sú zateplené.")
+        ex = excerpt(text, "rukavice prat v pracke", 300)
+        self.assertIn("Môže sa rukavica prať v práčke? Nie, kožené rukavice", ex)
+        self.assertLessEqual(len(ex), 300)
+        self.assertIn("zateplené", excerpt(text, "do zimy", 300))
+        self.assertEqual(excerpt(text, "xyz", 300), "")
+
+    def test_ai_gets_excerpt_not_whole_description(self):
+        docs = [d for d in (normalize_product(p, "sk") for p in RAW) if d]
+        docs[0] = dict(docs[0], long_description="Úvod. " * 500 + "Dajú sa prať? Áno, na 40 °C.")
+        fake = FakeAnthropic([{"results": [{"id": docs[0]["id"], "reason": "dá sa prať"}]}])
+        ai_mod.QueryAI(client=fake).rerank("dajú sa prať", "sk", docs[:3], 3)
+        sent = fake.calls[0]["messages"][0]["content"]
+        self.assertIn("Dajú sa prať? Áno, na 40 °C.", sent)
+        self.assertLess(len(sent), 2500)  # the 3000-char description is not sent whole
+
+
 class AnswerLanguageTests(unittest.TestCase):
     def test_hungarian_shop_asks_for_hungarian_answer_and_reasons(self):
         docs = [d for d in (normalize_product(p, "hu") or normalize_product(p, "sk") for p in RAW) if d]

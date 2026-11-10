@@ -142,6 +142,40 @@ def _is_meta_category(name):
     return any(w in n for w in _META_CATEGORY_WORDS)
 
 
+_SENT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def excerpt(text, query, limit=300):
+    """The 1-2 sentences of a product text that best match the customer's words, for the AI.
+
+    FAQ-aware: when a matching sentence is a question, its answer (the next sentence) comes
+    with it. Done locally, so the AI gets the useful part of long descriptions for few tokens.
+    """
+    q = [stem(canon(t)) for t in tokenize(query) if len(t) >= 3]
+    if not text or not q:
+        return ""
+    sents = [x.strip() for x in _SENT_RE.split(text) if x.strip()]
+    scored = []
+    for i, sent in enumerate(sents):
+        words = {canon(w) for w in tokenize(sent)}
+        hits = sum(1 for t in q if any(w.startswith(t) for w in words))
+        if hits:
+            scored.append((hits + (0.5 if sent.endswith("?") else 0), i))
+    out, used = [], set()
+    for _, i in sorted(scored, key=lambda x: (-x[0], x[1])):
+        part = [i] + ([i + 1] if sents[i].endswith("?") and i + 1 < len(sents) else [])
+        if used & set(part):
+            continue
+        chunk = " ".join(sents[j] for j in part)
+        if sum(len(c) for c in out) + len(chunk) > limit and out:
+            break
+        out.append(chunk[:limit])
+        used.update(part)
+        if len(out) >= 2:
+            break
+    return " … ".join(out)[:limit]
+
+
 class SearchIndex:
     def __init__(self, docs, extras=None, k1=1.2, b=0.75):
         """docs: list of dicts produced by sync.normalize_product().
