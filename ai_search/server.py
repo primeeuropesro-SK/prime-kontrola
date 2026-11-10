@@ -316,7 +316,7 @@ class Handler(BaseHTTPRequestHandler):
     def _static(self, name, ctype):
         try:
             with open(os.path.join(STATIC_DIR, name), "rb") as f:
-                self._send(200, f.read(), ctype, cache="public, max-age=300")
+                self._send(200, f.read(), ctype, cache="public, max-age=60")
         except FileNotFoundError:
             self._send(404, {"error": "not found"})
 

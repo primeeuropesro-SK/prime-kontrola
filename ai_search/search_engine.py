@@ -152,6 +152,7 @@ class SearchIndex:
         self.doc_len = []
         self.exact = {}  # folded code / ean -> doc_idx
         self.display = {}  # folded word -> how it is written in product titles (zimna -> zimná)
+        typo_terms = set()  # words customers misspell: from titles, categories, brands, short texts
         for i, d in enumerate(docs):
             for word in re.findall(r"\w+", d.get("title") or ""):
                 self.display.setdefault(fold(word), word.lower())
@@ -163,6 +164,8 @@ class SearchIndex:
                 for tok in tokenize(value):
                     self.postings[tok][i] = self.postings[tok].get(i, 0.0) + w
                     length += w
+                    if field != "long_description":
+                        typo_terms.add(tok)
             self.doc_len.append(length or 1.0)
             for key in (d.get("code"), d.get("ean"), *d.get("variant_codes", [])):
                 if key:
@@ -174,8 +177,10 @@ class SearchIndex:
         for term in self.vocab:
             self.canon_terms[canon(term)].append(term)
         self.canon_vocab = sorted(self.canon_terms)
+        # Typo index only for the product-describing words (titles, categories, brands, short texts):
+        # building it for every word of every long description cost ~30 MB per language.
         self.delete_index = defaultdict(set)
-        for c in self.canon_vocab:
+        for c in sorted({canon(t) for t in typo_terms}):
             if len(c) >= 4 and not c.isdigit():
                 for d in _deletes(c, 1):
                     self.delete_index[d].add(c)
