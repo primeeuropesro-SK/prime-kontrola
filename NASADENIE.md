@@ -128,8 +128,17 @@ Pre každú krajinu (Slovensko, Maďarsko) obsahuje:
 - výrazy, pri ktorých výsledky boli, ale zákazník neklikol, a top 20 hľadaných výrazov,
 - počet AI vyhľadávaní a ich úspešnosť.
 
-Zaznamenáva sa iba hľadaný text, jazyk e-shopu, počet výsledkov a kliknutý produkt – žiadne IP adresy
-ani iné osobné údaje. Záznamy sa mažú po 400 dňoch.
+Zaznamenáva sa hľadaný text, jazyk e-shopu, počet výsledkov, kliknutý produkt a **IP adresa** návštevníka
+(tabuľka „Kto hľadal – IP adresy“ s lokalitou a počtom návštev). Záznamy sa mažú po 400 dňoch,
+**IP adresy už po 90 dňoch** (premenná `IP_RETENTION_DAYS`).
+
+**GDPR:** IP adresa je osobný údaj. Doplňte do Zásad ochrany osobných údajov e-shopu vetu, napr.:
+*„Pri používaní vyhľadávania na webe spracúvame IP adresu a hľadaný text na účely analýzy a zlepšovania
+vyhľadávania (oprávnený záujem). IP adresy uchovávame najviac 90 dní.“*
+
+**Lokalita IP adries** sa zisťuje cez službu ipinfo.io (každá IP raz, výsledok sa uloží). Bez registrácie
+platí nízky denný limit; pre spoľahlivé fungovanie si na **ipinfo.io** zdarma založte účet (50 000 dopytov
+mesačne), skopírujte **token** a v Renderi ho pridajte do **Environment** ako `IPINFO_TOKEN`.
 
 ### Posielanie reportu e-mailom každý pondelok (voliteľné)
 

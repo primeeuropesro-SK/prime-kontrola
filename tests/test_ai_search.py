@@ -511,6 +511,80 @@ class AdminPagesTests(unittest.TestCase):
         self.assertEqual(answer_key(answers[0]), answers[0]["key"])
 
 
+class GeoVisitsTests(unittest.TestCase):
+    def test_lookup_cached_in_background_and_private_ips(self):
+        import tempfile, time
+        from ai_search import geo
+        calls = []
+        g = geo.GeoCache(os.path.join(tempfile.mkdtemp(), "geo.json"), fetch=lambda ip: calls.append(ip) or "Bratislava, SK")
+        self.assertIsNone(g.get("8.8.8.8"))            # not known yet -> looked up in the background
+        for _ in range(50):
+            if g.get("8.8.8.8"):
+                break
+            time.sleep(0.05)
+        self.assertEqual(g.get("8.8.8.8"), "Bratislava, SK")
+        g.get("8.8.8.8")
+        self.assertEqual(calls, ["8.8.8.8"])          # looked up only once
+        self.assertEqual(g.get("10.1.2.3"), "vnútorná sieť")
+
+    def test_visits_count_page_views(self):
+        import tempfile
+        from ai_search import geo
+        v = geo.VisitStats(os.path.join(tempfile.mkdtemp(), "ip.json"))
+        for sid in ("a", "a", "b", "b", "c"):
+            v.record("1.2.3.4", sid)
+        self.assertEqual(v.get("1.2.3.4")["visits"], 3)
+
+    def test_report_shows_ip_location_visits_and_cleanup_removes_ips(self):
+        import tempfile
+        from datetime import timedelta
+        from ai_search import analytics
+        d = tempfile.mkdtemp()
+        log = analytics.EventLog(d)
+        log.append({"type": "search", "lang": "sk", "q": "zvaracska kukla", "sid": "s1", "ip": "1.2.3.4", "n": 0})
+        log.append({"type": "click", "lang": "sk", "q": "vesta", "sid": "s2", "ip": "5.6.7.8", "n": 9, "pid": 1})
+        rep = analytics.build_report(log, {}, analytics.iso_week(analytics.now_local().date()))
+        sk = rep["langs"]["sk"]
+        self.assertEqual(sk["not_found"][0]["ips"], ["1.2.3.4"])
+        self.assertEqual({v["ip"] for v in sk["visitors"]}, {"1.2.3.4", "5.6.7.8"})
+        page = analytics.render_html(rep, {}, geo=lambda ip: "Košice, SK", visits=lambda ip: {"visits": 7})
+        self.assertIn("Kto hľadal – IP adresy", page)
+        self.assertIn("Košice, SK", page)
+        self.assertIn("<td class='n'>7</td>", page)
+        self.assertIn("1.2.3.4;Košice, SK;7", analytics.searches_csv(rep, lambda ip: "Košice, SK", lambda ip: {"visits": 7}))
+        # GDPR: an old day file loses its IP addresses
+        old_day = (analytics.now_local().date() - timedelta(days=100)).isoformat()
+        with open(os.path.join(d, old_day + ".jsonl"), "w", encoding="utf-8") as f:
+            f.write(json.dumps({"type": "search", "q": "x", "ip": "9.9.9.9", "t": 1}) + "\n")
+        log.cleanup(ip_days=90)
+        with open(os.path.join(d, old_day + ".jsonl"), encoding="utf-8") as f:
+            self.assertNotIn("9.9.9.9", f.read())
+
+
+class DemandBackgroundTests(unittest.TestCase):
+    def test_report_does_not_wait_for_ai(self):
+        import tempfile, time
+        from ai_search import analytics
+
+        class SlowAI:
+            enabled = True
+
+            def product_demand(self, lang, queries, phrases):
+                time.sleep(2)
+                return [{"product": "Kukla", "queries": queries[:1], "status": "missing", "catalog_phrase": "", "note": ""}]
+
+        report = {"week": "2026-W46", "langs": {"sk": {"not_found": [{"q": "kukla", "count": 2}], "no_click_queries": []}}, "prev": {}}
+        d = tempfile.mkdtemp()
+        t = time.time()
+        analytics.add_demand(report, SlowAI(), d, {}, background=True)
+        self.assertLess(time.time() - t, 0.5)
+        self.assertTrue(report["langs"]["sk"]["demand_pending"])
+        time.sleep(2.5)
+        report2 = {"week": "2026-W46", "langs": {"sk": {"not_found": [{"q": "kukla", "count": 2}], "no_click_queries": []}}, "prev": {}}
+        analytics.add_demand(report2, SlowAI(), d, {}, background=True)
+        self.assertEqual(report2["langs"]["sk"]["demand"][0]["product"], "Kukla")
+
+
 class TokenTests(unittest.TestCase):
     def test_plus_in_token_survives_url(self):
         from urllib.parse import parse_qs

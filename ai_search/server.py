@@ -25,7 +25,7 @@ from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ai_search import admin_pages, analytics, mailer, rules, sync, synonyms  # noqa: E402
+from ai_search import admin_pages, analytics, geo, mailer, rules, sync, synonyms  # noqa: E402
 from ai_search.ai import RERANK_CANDIDATES, QueryAI  # noqa: E402
 from ai_search.search_engine import SearchIndex, fold, tokenize  # noqa: E402
 
@@ -100,9 +100,10 @@ class Store:
         with self.lock:
             return {lang: [ph for ph, _ in idx.phrases] for lang, idx in self.indexes.items()}
 
-    def report(self, week=None):
+    def report(self, week=None, background=False):
         report = analytics.build_report(EVENTS, self.products_by_id(), week)
-        return analytics.add_demand(report, self.ai, os.path.join(sync.DATA_DIR, "demand"), self.phrases_by_lang())
+        return analytics.add_demand(report, self.ai, os.path.join(sync.DATA_DIR, "demand"), self.phrases_by_lang(),
+                                    background=background)
 
     def products_by_id(self):
         with self.lock:
@@ -130,7 +131,7 @@ class Store:
         with self.lock:
             return self.indexes.get(lang) or next(iter(self.indexes.values()), None)
 
-    def search(self, q, lang, limit, use_ai, sid=""):
+    def search(self, q, lang, limit, use_ai, sid="", ip=""):
         idx = self.index(lang)
         if idx is None:
             return {"error": "catalog not loaded"}
@@ -172,7 +173,7 @@ class Store:
             # Every AI answer is kept for the owner to review in /report/ai.
             try:
                 EVENTS.append({
-                    "type": "ai_result", "lang": lang, "q": q, "sid": sid[:16], "ok": bool(ai_info),
+                    "type": "ai_result", "lang": lang, "q": q, "sid": sid[:16], "ip": ip, "ok": bool(ai_info),
                     "summary": (ai_info or {}).get("summary"), "keywords": (ai_info or {}).get("keywords"),
                     "filters": {k: v for k, v in filters.items() if v},
                     "products": [[p["id"], p.get("reason", "")] for p in products],
@@ -248,6 +249,8 @@ STORE = Store()
 POPULAR = Popular(os.path.join(sync.DATA_DIR, "popular.json"))
 EVENTS = analytics.EventLog(os.path.join(sync.DATA_DIR, "events"))
 RULES = rules.Rules(os.path.join(sync.DATA_DIR, "rules.json"))
+GEO = geo.GeoCache(os.path.join(sync.DATA_DIR, "geo_cache.json"))
+VISITS = geo.VisitStats(os.path.join(sync.DATA_DIR, "ip_stats.json"))
 _track_rate = defaultdict(deque)
 
 
@@ -365,7 +368,8 @@ class Handler(BaseHTTPRequestHandler):
                     "popular": POPULAR.top(lang),
                     "categories": idx.top_categories() if idx else [],
                 }, cache="no-store")
-            result = STORE.search(q, lang, limit, use_ai and not ai_limited, (qs.get("sid", [""])[0] or ""))
+            result = STORE.search(q, lang, limit, use_ai and not ai_limited, (qs.get("sid", [""])[0] or ""),
+                                  self._client_ip() if use_ai else "")
             if ai_limited:
                 result["ai_rate_limited"] = True
             return self._send(200 if "error" not in result else 503, result, cache="no-store")
@@ -388,8 +392,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             kind = kind if kind in analytics.EVENT_TYPES else "all"
             if q and idx is not None and _track_allowed(ip):
-                event = {"type": kind, "lang": lang, "q": q, "sid": (qs.get("sid", [""])[0] or "")[:16],
-                         "n": idx.strict_count(q)}
+                sid = (qs.get("sid", [""])[0] or "")[:16]
+                event = {"type": kind, "lang": lang, "q": q, "sid": sid, "ip": ip, "n": idx.strict_count(q)}
+                VISITS.record(ip, sid)
                 try:
                     pid = int(qs.get("pid", [""])[0])
                     event["pid"] = pid
@@ -439,18 +444,18 @@ class Handler(BaseHTTPRequestHandler):
             if not _token_ok(token):
                 return self._send(403, b"<h1>403</h1><p>Chyba alebo chybny token.</p>", "text/html; charset=utf-8")
             try:
-                report = STORE.report(qs.get("week", [None])[0])
+                report = STORE.report(qs.get("week", [None])[0], background=True)
             except ValueError:
                 return self._send(400, {"error": "week must look like 2026-W45"})
             if url.path.endswith(".csv"):
                 body = (analytics.demand_csv(report) if "demand" in url.path
-                        else analytics.searches_csv(report) if "searches" in url.path
+                        else analytics.searches_csv(report, GEO.get, VISITS.get) if "searches" in url.path
                         else analytics.not_found_csv(report))
                 return self._send(200, body.encode("utf-8"), "text/csv; charset=utf-8", cache="no-store")
             known = {lang: {fold(c) for c in STORE.synonyms_for(lang)} for lang in report["langs"]}
             only = qs.get("lang", [None])[0]
             page = analytics.render_html(report, STORE.domains, "/report", token, known,
-                                         only if only in report["langs"] else None)
+                                         only if only in report["langs"] else None, geo=GEO.get, visits=VISITS.get)
             return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8", cache="no-store")
         if url.path == "/widget.js":
             return self._static("widget.js", "application/javascript; charset=utf-8")
@@ -544,9 +549,11 @@ def _weekly_loop():
                 report = STORE.report()
                 if state.get("sent_week") != report["week"]:
                     if mailer.configured():
-                        mailer.send(f"Report vyhľadávania {report['week']}", analytics.render_html(report, STORE.domains))
+                        mailer.send(f"Report vyhľadávania {report['week']}", analytics.render_html(report, STORE.domains, geo=GEO.get, visits=VISITS.get))
                         log.info("weekly report %s e-mailed", report["week"])
-                    EVENTS.cleanup()
+                    EVENTS.cleanup(ip_days=geo.IP_RETENTION_DAYS)
+                    GEO.forget_older_than(geo.IP_RETENTION_DAYS * 86400)
+                    VISITS.forget_older_than(geo.IP_RETENTION_DAYS * 86400)
                     with open(state_path, "w", encoding="utf-8") as f:
                         json.dump({"sent_week": report["week"]}, f)
         except Exception as e:
