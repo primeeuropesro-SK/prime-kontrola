@@ -72,11 +72,32 @@ class EventLog:
                             continue
             d += timedelta(days=1)
 
-    def cleanup(self):
-        cutoff = (now_local().date() - timedelta(days=RETENTION_DAYS)).isoformat()
-        for name in os.listdir(self.dir) if os.path.isdir(self.dir) else []:
-            if name.endswith(".jsonl") and name[:10] < cutoff:
-                os.remove(os.path.join(self.dir, name))
+    def cleanup(self, ip_days=90):
+        """Delete events after RETENTION_DAYS; remove IP addresses after ip_days (GDPR)."""
+        today = now_local().date()
+        cutoff = (today - timedelta(days=RETENTION_DAYS)).isoformat()
+        ip_cutoff = (today - timedelta(days=ip_days)).isoformat()
+        for name in sorted(os.listdir(self.dir)) if os.path.isdir(self.dir) else []:
+            if not name.endswith(".jsonl"):
+                continue
+            path = os.path.join(self.dir, name)
+            if name[:10] < cutoff:
+                os.remove(path)
+            elif name[:10] < ip_cutoff:
+                with self.lock, open(path, encoding="utf-8") as f:
+                    lines = f.readlines()
+                if any('"ip"' in l for l in lines):
+                    events = []
+                    for l in lines:
+                        try:
+                            ev = json.loads(l)
+                        except ValueError:
+                            continue
+                        ev.pop("ip", None)
+                        events.append(json.dumps(ev, ensure_ascii=False) + "\n")
+                    with self.lock, open(path + ".tmp", "w", encoding="utf-8") as f:
+                        f.writelines(events)
+                    os.replace(path + ".tmp", path)
 
 
 # ---------------------------------------------------------------------- aggregation
@@ -103,7 +124,7 @@ def group_searches(events):
                 cur["t"] = e["t"]
             else:
                 cur = {"lang": lang, "qf": qf, "q": e["q"].strip(), "n": e.get("n", 0), "t": e["t"],
-                       "clicks": [], "ai": False}
+                       "clicks": [], "ai": False, "ip": e.get("ip")}
                 searches.append(cur)
             if e["type"] == "click" and e.get("pid"):
                 cur["clicks"].append(e["pid"])
@@ -111,6 +132,22 @@ def group_searches(events):
             if e["type"] == "ai":
                 cur["ai"] = True
     return searches
+
+
+def _visitors(searches, limit=50):
+    """Searches of the week grouped by IP: how many, when last, what (most frequent first)."""
+    by_ip = defaultdict(list)
+    for s in searches:
+        if s.get("ip"):
+            by_ip[s["ip"]].append(s)
+    out = []
+    for ip, ss in by_ip.items():
+        queries = Counter(s["q"].lower() for s in ss)
+        out.append({"ip": ip, "searches": len(ss), "last": max(s["t"] for s in ss),
+                    "clicked": sum(1 for s in ss if s["clicks"]), "ai": sum(1 for s in ss if s["ai"]),
+                    "queries": [q for q, _ in queries.most_common(4)]})
+    out.sort(key=lambda v: (-v["searches"], -v["last"]))
+    return out[:limit]
 
 
 def _pct(a, b):
@@ -134,11 +171,14 @@ def summarize(searches, products=None, top=20):
 
         def top_queries(items, n):
             c = Counter(s["qf"] for s in items)
-            first, last = {}, {}
+            first, last, ips = {}, {}, defaultdict(list)
             for s in items:
+                if s.get("ip") and s["ip"] not in ips[s["qf"]]:
+                    ips[s["qf"]].append(s["ip"])
                 first[s["qf"]] = min(first.get(s["qf"], s["t"]), s["t"])
                 last[s["qf"]] = max(last.get(s["qf"], 0), s["t"])
-            return [{"q": display[q], "count": k, "first": first[q], "last": last[q]} for q, k in c.most_common(n)]
+            return [{"q": display[q], "count": k, "first": first[q], "last": last[q], "ips": ips[q][:5]}
+                    for q, k in c.most_common(n)]
 
         query_counts = Counter(s["qf"] for s in ss)
         query_ok = Counter(s["qf"] for s in ok)
@@ -170,10 +210,11 @@ def summarize(searches, products=None, top=20):
             "not_found_events": [{"q": s["q"], "t": s["t"]} for s in sorted(zero, key=lambda s: -s["t"])[:5000]],
             # every search with date, time and outcome, newest first (for the CSV)
             "search_events": [
-                {"q": s["q"], "t": s["t"], "n": s["n"], "clicked": bool(s["clicks"]), "ai": s["ai"]}
+                {"q": s["q"], "t": s["t"], "n": s["n"], "clicked": bool(s["clicks"]), "ai": s["ai"], "ip": s.get("ip")}
                 for s in sorted(ss, key=lambda s: -s["t"])[:20000]
             ],
             "no_click_queries": top_queries(no_click, top),
+            "visitors": _visitors(ss),
         }
     return out
 
@@ -194,9 +235,40 @@ def iso_week(d):
     return f"{y}-W{w:02d}"
 
 
+def ai_searches(events, products=None, limit=100):
+    """Every AI search of the period, newest first: what the AI understood, what the customer
+    clicked afterwards, their 👍/👎 and IP. {lang: [..]}"""
+    products = products or {}
+    clicks, votes = defaultdict(list), {}
+    for e in events:
+        k = (e.get("lang"), e.get("sid"), " ".join(fold(e.get("q", "")).split()))
+        if e.get("type") == "click" and e.get("pid"):
+            clicks[k].append(e["pid"])
+        elif e.get("type") == "ai_feedback":
+            votes[k] = e.get("v")
+    out = defaultdict(list)
+    for e in events:
+        if e.get("type") != "ai_result":
+            continue
+        lang = e.get("lang")
+        k = (lang, e.get("sid"), " ".join(fold(e.get("q", "")).split()))
+        catalog = products.get(lang, {})
+        out[lang].append({
+            "t": e.get("t", 0), "q": e.get("q", ""), "ip": e.get("ip"), "ok": e.get("ok", True),
+            "summary": e.get("summary") or "", "vote": votes.get(k),
+            "clicked": [catalog.get(pid, (f"#{pid}", None)) for pid in dict.fromkeys(clicks.get(k, []))],
+            "shown": len(e.get("products") or []),
+        })
+    return {lang: sorted(v, key=lambda a: -a["t"])[:limit] for lang, v in out.items()}
+
+
 def build_report(log, products, week=None):
     start, end = week_range(week)
-    cur = summarize(group_searches(log.read(start, end)), products)
+    events = list(log.read(start, end))
+    cur = summarize(group_searches(events), products)
+    for lang, items in ai_searches(events, products).items():
+        if lang in cur:
+            cur[lang]["ai_list"] = items
     prev_start = start - timedelta(days=7)
     prev = summarize(group_searches(log.read(prev_start, prev_start + timedelta(days=6))), products)
     return {"week": iso_week(start), "start": start.isoformat(), "end": end.isoformat(),
@@ -208,9 +280,28 @@ DEMAND_MAX_QUERIES = 150
 DEMAND_REFRESH_SEC = 3 * 3600  # the running week is re-analysed at most every 3 hours
 
 
-def add_demand(report, ai, cache_dir, phrases_by_lang):
+_demand_running = set()
+_demand_lock = threading.Lock()
+
+
+def _run_demand(ai, lang, queries, phrases, path, digest):
+    try:
+        new = ai.product_demand(lang, queries, phrases)
+        if new is not None:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path + ".tmp", "w", encoding="utf-8") as f:
+                json.dump({"hash": digest, "t": int(time.time()), "items": new}, f, ensure_ascii=False)
+            os.replace(path + ".tmp", path)
+    finally:
+        with _demand_lock:
+            _demand_running.discard(path)
+
+
+def add_demand(report, ai, cache_dir, phrases_by_lang, background=False):
     """Add report["langs"][lang]["demand"]: products customers looked for and did not find,
-    grouped by AI. Cached per week and language so viewing the report costs nothing."""
+    grouped by AI. Cached per week and language so viewing the report costs nothing.
+    background=True: never wait for the AI - show the last analysis and refresh it in a thread
+    (r["demand_pending"] tells the page that a newer one is on its way)."""
     import hashlib
     for lang, r in report["langs"].items():
         counts, last = Counter(), {}
@@ -232,12 +323,21 @@ def add_demand(report, ai, cache_dir, phrases_by_lang):
         fresh = cached and (cached.get("hash") == digest or time.time() - cached.get("t", 0) < DEMAND_REFRESH_SEC)
         items = cached.get("items") if cached else None
         if not fresh and ai is not None and getattr(ai, "enabled", False):
-            new = ai.product_demand(lang, queries, sorted(phrases_by_lang.get(lang, [])))
-            if new is not None:
-                items = new
-                os.makedirs(cache_dir, exist_ok=True)
-                with open(path, "w", encoding="utf-8") as f:
-                    json.dump({"hash": digest, "t": int(time.time()), "items": items}, f, ensure_ascii=False)
+            phrases = sorted(phrases_by_lang.get(lang, []))
+            if background:
+                with _demand_lock:
+                    start = path not in _demand_running
+                    _demand_running.add(path)
+                if start:
+                    threading.Thread(target=_run_demand, args=(ai, lang, queries, phrases, path, digest), daemon=True).start()
+                r["demand_pending"] = True
+            else:
+                new = ai.product_demand(lang, queries, phrases)
+                if new is not None:
+                    items = new
+                    os.makedirs(cache_dir, exist_ok=True)
+                    with open(path, "w", encoding="utf-8") as f:
+                        json.dump({"hash": digest, "t": int(time.time()), "items": items}, f, ensure_ascii=False)
         demand = []
         for it in items or []:
             qs = [q for q in it.get("queries", []) if q in counts]
@@ -305,7 +405,62 @@ def _synonym_table(lang, syn, token, report, base_url, known):
             "<table><tr><th>Hľadaní</th><th>Naposledy</th><th>Zákazník hľadal → výraz v katalógu</th></tr>" + "".join(rows) + "</table>")
 
 
-def render_html(report, domains=None, base_url="", token="", known_synonyms=None, only_lang=None):
+def _ips_html(ips, geo):
+    e = html.escape
+    out = []
+    for ip in ips or []:
+        place = geo(ip) if geo else ""
+        out.append(f"{e(ip)}<span class='sub'> · {e(place) if place else 'zisťujem…' if place is None else ''}</span>")
+    return "<br>".join(out)
+
+
+def _ai_table(r, cl, geo, base_url, token, week):
+    e = html.escape
+    rows = r.get("ai_list") or []
+    title = f"<h3>Hľadali cez AI – {e(cl)}</h3>"
+    if not rows:
+        return title + "<p class='empty'>V tomto týždni nikto nehľadal cez AI.</p>"
+    body = []
+    for a in rows:
+        if a["clicked"]:
+            res = "✅ klikol: " + ", ".join(
+                (f"<a href='{e(u)}' target='_blank'>{e(t)}</a>" if u else e(t)) for t, u in a["clicked"][:3])
+        elif not a["ok"]:
+            res = "<span style='color:#b26a00'>AI neodpovedala</span>"
+        else:
+            res = f"<span class='sub'>bez kliku ({a['shown']} produktov)</span>"
+        vote = {"up": " 👍", "down": " 👎"}.get(a["vote"], "")
+        place = geo(a["ip"]) if (geo and a.get("ip")) else ""
+        ip = (f"{e(a['ip'])}<span class='sub'> · {e(place) if place else 'zisťujem…' if place is None else ''}</span>"
+              if a.get("ip") else "")
+        body.append(f"<tr><td class='n'>{e(fmt_time(a['t']))}</td><td><b>{e(a['q'])}</b></td>"
+                    f"<td class='sub'>{e(a['summary'])}</td><td>{res}{vote}</td><td class='ips'>{ip}</td></tr>")
+    more = (f"<p class='sub'>Podrobnosti, hodnotenie a opravy AI odpovedí: "
+            f"<a href='{e(base_url)}/ai?week={e(week)}&filter=all&token={e(token)}'>AI odpovede</a>.</p>") if base_url and token else ""
+    return (title + "<table><tr><th>Dátum a čas</th><th>Výraz</th><th>AI pochopila</th><th>Výsledok</th>"
+            "<th>IP (lokalita)</th></tr>" + "".join(body) + "</table>" + more)
+
+
+def _visitors_table(r, cl, geo, visits):
+    e = html.escape
+    rows = r.get("visitors") or []
+    title = f"<h3>Kto hľadal – IP adresy – {e(cl)}</h3>"
+    if not rows:
+        return title + "<p class='empty'>Žiadne údaje (IP adresy sa ukladajú od nasadenia tejto funkcie).</p>"
+    body = []
+    for v in rows:
+        place = geo(v["ip"]) if geo else ""
+        total = (visits(v["ip"]) or {}).get("visits", "") if visits else ""
+        body.append(f"<tr><td>{e(v['ip'])}</td><td>{e(place) if place else '<span class=sub>zisťujem…</span>' if place is None else ''}</td>"
+                    f"<td class='n'>{v['searches']}</td><td class='n'>{v['clicked']}</td><td class='n'>{e(str(total))}</td>"
+                    f"<td class='n'>{e(fmt_time(v['last']))}</td><td>{e(', '.join(v['queries']))}</td></tr>")
+    return (title + "<table><tr><th>IP adresa</th><th>Lokalita</th><th>Vyhľadávaní</th><th>S klikom</th>"
+            "<th>Návštev celkovo</th><th>Naposledy</th><th>Čo hľadal</th></tr>" + "".join(body) + "</table>"
+            "<p class='sub'>Návštev celkovo = koľkokrát už táto IP adresa použila vyhľadávanie (od začiatku zberu, "
+            "najviac za posledných 90 dní). IP adresa môže patriť firme alebo mobilnému operátorovi, nie vždy jednej osobe.</p>")
+
+
+def render_html(report, domains=None, base_url="", token="", known_synonyms=None, only_lang=None, geo=None, visits=None):
     e = html.escape
     domains = domains or {}
     parts = [f"""<!doctype html><html lang="sk" translate="no"><head><meta charset="utf-8"><meta name="google" content="notranslate">
@@ -319,7 +474,7 @@ h3{{font-size:15px;margin:18px 0 8px}} .sub{{color:#666}} .nav a{{margin-right:1
 .kpi b{{display:block;font-size:22px}} .kpi span{{color:#666;font-size:12px}} .d{{font-size:12px;margin-left:6px}}
 table{{width:100%;border-collapse:collapse;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.08)}}
 th,td{{text-align:left;padding:7px 10px;border-bottom:1px solid #eee;vertical-align:top}} th{{background:#fafafa;font-size:12px;color:#666}}
-td.n{{text-align:right;white-space:nowrap}} a{{color:#1f5fbf}} .cols{{display:grid;grid-template-columns:1fr 1fr;gap:14px}}
+td.n{{text-align:right;white-space:nowrap}} td.ips{{font-size:12px;white-space:nowrap}} a{{color:#1f5fbf}} .cols{{display:grid;grid-template-columns:1fr 1fr;gap:14px}}
 @media(max-width:700px){{.cols{{grid-template-columns:1fr}}}}
 input{{font:inherit;font-size:13px;border:1px solid #ccc;border-radius:6px;padding:4px 8px}}
 button{{font:inherit;font-size:12px;border:1px solid #2f7d32;color:#2f7d32;background:#fff;border-radius:6px;padding:3px 10px;cursor:pointer}} .empty{{color:#888;background:#fff;padding:10px;border-radius:10px}}
@@ -363,6 +518,9 @@ h2.country{{border-bottom:3px solid #f39200;padding-bottom:6px}}
                      "</div>")
 
         demand = r.get("demand")
+        if r.get("demand_pending"):
+            parts.append(f"<p class='sub'>⏳ AI práve pripravuje novú analýzu „Čo zákazníci hľadajú a nemáte“ – {e(cl)}. "
+                         "Obnovte stránku o minútu.</p>")
         if demand:
             missing = [d for d in demand if d["status"] == "missing"]
             syn = [d for d in demand if d["status"] == "synonym"]
@@ -390,14 +548,17 @@ h2.country{{border-bottom:3px solid #f39200;padding-bottom:6px}}
                       f'<td class="n">{e(fmt_time(x.get("last")))}</td>'] for i, x in enumerate(r["top_products"], 1)]
         parts.append(table(f"Top 20 produktov z vyhľadávania – {cl}", ["#", "Produkt", "Kliknutia", "Naposledy kliknuté"], prod_rows))
         parts.append('<div class="cols"><div>')
-        parts.append(table(f"Hľadali a nenašli – {cl}", ["Výraz", "Počet", "Naposledy hľadané"],
+        parts.append(table(f"Hľadali a nenašli – {cl}", ["Výraz", "Počet", "Naposledy hľadané", "IP (lokalita)"],
                            [[f"<td>{e(x['q'])}</td>", f'<td class="n">{x["count"]}</td>',
-                             f'<td class="n">{e(fmt_time(x.get("last")))}</td>'] for x in r["not_found"]]))
+                             f'<td class="n">{e(fmt_time(x.get("last")))}</td>',
+                             f'<td class="ips">{_ips_html(x.get("ips"), geo)}</td>'] for x in r["not_found"]]))
         parts.append("</div><div>")
         parts.append(table(f"Našli, ale neklikli – {cl}", ["Výraz", "Počet", "Naposledy hľadané"],
                            [[f"<td>{e(x['q'])}</td>", f'<td class="n">{x["count"]}</td>',
                              f'<td class="n">{e(fmt_time(x.get("last")))}</td>'] for x in r["no_click_queries"]]))
         parts.append("</div></div>")
+        parts.append(_ai_table(r, cl, geo, base_url, token, report["week"]))
+        parts.append(_visitors_table(r, cl, geo, visits))
         parts.append(table(f"Top 20 hľadaných výrazov – {cl}", ["Výraz", "Počet", "Úspešnosť", "Naposledy hľadané"],
                            [[f"<td>{e(x['q'])}</td>", f'<td class="n">{x["count"]}</td>', f'<td class="n">{x["success_rate"]} %</td>',
                              f'<td class="n">{e(fmt_time(x.get("last")))}</td>'] for x in r["top_queries"]]))
@@ -409,16 +570,18 @@ h2.country{{border-bottom:3px solid #f39200;padding-bottom:6px}}
     return "".join(parts)
 
 
-def searches_csv(report):
+def searches_csv(report, geo=None, visits=None):
     """Every search of the week with date, time and outcome."""
     buf = io.StringIO()
     w = csv.writer(buf, delimiter=";")
-    w.writerow(["krajina", "dátum", "čas", "hľadaný výraz", "výsledok", "AI"])
+    w.writerow(["krajina", "dátum", "čas", "hľadaný výraz", "výsledok", "AI", "IP adresa", "lokalita", "návštev celkovo"])
     for lang, r in report["langs"].items():
         for x in r.get("search_events", []):
             date_s, time_s = fmt_time(x["t"]).split(" ")
             outcome = "klik na produkt" if x["clicked"] else ("nenašli" if x["n"] == 0 else "bez kliku")
-            w.writerow([COUNTRY.get(lang, lang), date_s, time_s, x["q"], outcome, "áno" if x["ai"] else ""])
+            ip = x.get("ip") or ""
+            w.writerow([COUNTRY.get(lang, lang), date_s, time_s, x["q"], outcome, "áno" if x["ai"] else "",
+                        ip, (geo(ip) or "") if geo and ip else "", (visits(ip).get("visits", "") if visits and ip else "")])
     return "\ufeff" + buf.getvalue()
 
 
