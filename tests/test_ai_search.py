@@ -561,6 +561,27 @@ class GeoVisitsTests(unittest.TestCase):
             self.assertNotIn("9.9.9.9", f.read())
 
 
+class AiSearchTableTests(unittest.TestCase):
+    def test_ai_searches_listed_with_click_vote_and_ip(self):
+        import tempfile
+        from ai_search import analytics
+        log = analytics.EventLog(tempfile.mkdtemp())
+        log.append({"type": "ai", "lang": "hu", "q": "zokni télre", "sid": "s1", "ip": "84.2.33.1", "n": 5})
+        log.append({"type": "ai_result", "lang": "hu", "q": "zokni télre", "sid": "s1", "ip": "84.2.33.1", "ok": True,
+                    "summary": "Téli zoknit keresek.", "products": [[7, "meleg"]]})
+        log.append({"type": "click", "lang": "hu", "q": "zokni télre", "sid": "s1", "ip": "84.2.33.1", "pid": 7, "n": 5})
+        log.append({"type": "ai_feedback", "lang": "hu", "q": "zokni télre", "sid": "s1", "v": "up"})
+        rep = analytics.build_report(log, {"hu": {7: ("Procera Work Socks", "https://shop/p/7")}},
+                                     analytics.iso_week(analytics.now_local().date()))
+        a = rep["langs"]["hu"]["ai_list"][0]
+        self.assertEqual((a["q"], a["summary"], a["vote"], a["clicked"][0][0]), ("zokni télre", "Téli zoknit keresek.", "up", "Procera Work Socks"))
+        page = analytics.render_html(rep, {}, "/report", "tok", geo=lambda ip: "Budapest, HU")
+        self.assertIn("Hľadali cez AI – 🇭🇺 Maďarsko", page)
+        self.assertIn("✅ klikol", page)
+        self.assertIn("84.2.33.1<span class='sub'> · Budapest, HU", page)
+        self.assertIn("Hľadali a nenašli", page)  # the not-found table stays
+
+
 class DemandBackgroundTests(unittest.TestCase):
     def test_report_does_not_wait_for_ai(self):
         import tempfile, time

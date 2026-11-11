@@ -235,9 +235,40 @@ def iso_week(d):
     return f"{y}-W{w:02d}"
 
 
+def ai_searches(events, products=None, limit=100):
+    """Every AI search of the period, newest first: what the AI understood, what the customer
+    clicked afterwards, their 👍/👎 and IP. {lang: [..]}"""
+    products = products or {}
+    clicks, votes = defaultdict(list), {}
+    for e in events:
+        k = (e.get("lang"), e.get("sid"), " ".join(fold(e.get("q", "")).split()))
+        if e.get("type") == "click" and e.get("pid"):
+            clicks[k].append(e["pid"])
+        elif e.get("type") == "ai_feedback":
+            votes[k] = e.get("v")
+    out = defaultdict(list)
+    for e in events:
+        if e.get("type") != "ai_result":
+            continue
+        lang = e.get("lang")
+        k = (lang, e.get("sid"), " ".join(fold(e.get("q", "")).split()))
+        catalog = products.get(lang, {})
+        out[lang].append({
+            "t": e.get("t", 0), "q": e.get("q", ""), "ip": e.get("ip"), "ok": e.get("ok", True),
+            "summary": e.get("summary") or "", "vote": votes.get(k),
+            "clicked": [catalog.get(pid, (f"#{pid}", None)) for pid in dict.fromkeys(clicks.get(k, []))],
+            "shown": len(e.get("products") or []),
+        })
+    return {lang: sorted(v, key=lambda a: -a["t"])[:limit] for lang, v in out.items()}
+
+
 def build_report(log, products, week=None):
     start, end = week_range(week)
-    cur = summarize(group_searches(log.read(start, end)), products)
+    events = list(log.read(start, end))
+    cur = summarize(group_searches(events), products)
+    for lang, items in ai_searches(events, products).items():
+        if lang in cur:
+            cur[lang]["ai_list"] = items
     prev_start = start - timedelta(days=7)
     prev = summarize(group_searches(log.read(prev_start, prev_start + timedelta(days=6))), products)
     return {"week": iso_week(start), "start": start.isoformat(), "end": end.isoformat(),
@@ -383,6 +414,33 @@ def _ips_html(ips, geo):
     return "<br>".join(out)
 
 
+def _ai_table(r, cl, geo, base_url, token, week):
+    e = html.escape
+    rows = r.get("ai_list") or []
+    title = f"<h3>Hľadali cez AI – {e(cl)}</h3>"
+    if not rows:
+        return title + "<p class='empty'>V tomto týždni nikto nehľadal cez AI.</p>"
+    body = []
+    for a in rows:
+        if a["clicked"]:
+            res = "✅ klikol: " + ", ".join(
+                (f"<a href='{e(u)}' target='_blank'>{e(t)}</a>" if u else e(t)) for t, u in a["clicked"][:3])
+        elif not a["ok"]:
+            res = "<span style='color:#b26a00'>AI neodpovedala</span>"
+        else:
+            res = f"<span class='sub'>bez kliku ({a['shown']} produktov)</span>"
+        vote = {"up": " 👍", "down": " 👎"}.get(a["vote"], "")
+        place = geo(a["ip"]) if (geo and a.get("ip")) else ""
+        ip = (f"{e(a['ip'])}<span class='sub'> · {e(place) if place else 'zisťujem…' if place is None else ''}</span>"
+              if a.get("ip") else "")
+        body.append(f"<tr><td class='n'>{e(fmt_time(a['t']))}</td><td><b>{e(a['q'])}</b></td>"
+                    f"<td class='sub'>{e(a['summary'])}</td><td>{res}{vote}</td><td class='ips'>{ip}</td></tr>")
+    more = (f"<p class='sub'>Podrobnosti, hodnotenie a opravy AI odpovedí: "
+            f"<a href='{e(base_url)}/ai?week={e(week)}&filter=all&token={e(token)}'>AI odpovede</a>.</p>") if base_url and token else ""
+    return (title + "<table><tr><th>Dátum a čas</th><th>Výraz</th><th>AI pochopila</th><th>Výsledok</th>"
+            "<th>IP (lokalita)</th></tr>" + "".join(body) + "</table>" + more)
+
+
 def _visitors_table(r, cl, geo, visits):
     e = html.escape
     rows = r.get("visitors") or []
@@ -499,6 +557,7 @@ h2.country{{border-bottom:3px solid #f39200;padding-bottom:6px}}
                            [[f"<td>{e(x['q'])}</td>", f'<td class="n">{x["count"]}</td>',
                              f'<td class="n">{e(fmt_time(x.get("last")))}</td>'] for x in r["no_click_queries"]]))
         parts.append("</div></div>")
+        parts.append(_ai_table(r, cl, geo, base_url, token, report["week"]))
         parts.append(_visitors_table(r, cl, geo, visits))
         parts.append(table(f"Top 20 hľadaných výrazov – {cl}", ["Výraz", "Počet", "Úspešnosť", "Naposledy hľadané"],
                            [[f"<td>{e(x['q'])}</td>", f'<td class="n">{x["count"]}</td>', f'<td class="n">{x["success_rate"]} %</td>',
