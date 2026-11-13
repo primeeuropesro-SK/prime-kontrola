@@ -85,22 +85,36 @@
   }
 
   function render(d) {
-    const items = activeItems(d), chk = FP.totalCheck(d.inv, items), ok = chk.ok;
+    const items = activeItems(d), chk = FP.totalCheck(d.inv, items);
     const cur = esc(d.inv.currency);
-    const chip = ok === true ? `<span class="chip ok">Súčet sedí s faktúrou${chk.diff ? ` (rozdiel ${money(chk.diff)} – zaokrúhlenie)` : ""}</span>`
-      : ok === false ? `<span class="chip bad">Rozdiel ${money(chk.diff)} ${cur}</span>` : `<span class="chip none">Súčet na faktúre nenájdený</span>`;
     const warn = [...d.inv.warnings];
+    const offItems = d.inv.items.filter(it => !it.on), offSum = FP.total(offItems);
+    const orphSum = d.inv.orphans.reduce((s, o) => s + FP.amount(o), 0n);
+    const rounding = items.filter(it => rowDiff(it) !== 0n);
+    const verified = items.filter(it => it.value !== undefined && rowDiff(it) === 0n).length;
+    const absd = v => (v < 0n ? -v : v);
+    const explained = chk.ok === false && absd(chk.diff - offSum - orphSum) <= FP.TOLERANCE && (offItems.length || d.inv.orphans.length);
+    const state = chk.ok === true ? "ok" : explained ? "explained" : chk.ok === false ? "bad" : "none";
+    const kind = o => (/transport|doprav|shipping|freight|delivery|przesy|dostaw|fracht|versand|po[šs]tovn|logist|packing|repack/i.test(o.line) ? "Doprava" : "Riadok bez EAN");
+    const chip = state === "ok" ? `<span class="chip ok">Súčet sedí s faktúrou${chk.diff ? ` (rozdiel ${money(chk.diff)} – zaokrúhlenie)` : ""}</span>`
+      : state === "explained" ? `<span class="chip ok">Položky aj ceny sedia</span>`
+      : state === "bad" ? `<span class="chip bad">Rozdiel ${money(chk.diff)} ${cur}</span>` : `<span class="chip none">Súčet na faktúre nenájdený</span>`;
+    const orphRows = d.inv.orphans.map((o, k) => `<li><b>${kind(o)}: ${money(FP.amount(o))} ${cur}</b> (str. ${o.page}) – <span class="src">${esc(o.line)}</span>${o.badEan ? " <b>(EAN má chybnú kontrolnú číslicu)</b>" : ""} <button class="btn mini" type="button" data-orphan="${k}">Pridať do TXT</button></li>`);
+    const offRow = offItems.length ? [`<li>Vypnuté riadky: ${offItems.length} ks za <b>${money(offSum)} ${cur}</b></li>`] : [];
+    const validLine = `<b>${items.length} položiek s EAN je v poriadku</b>${verified ? ` – pri ${verified === items.length ? "všetkých" : verified} sedí počet × cena so sumou riadku na faktúre` : ""}.`;
     let diag = "";
-    if (ok === false) {
-      const offItems = d.inv.items.filter(it => !it.on), offSum = FP.total(offItems);
-      const rounding = d.inv.items.filter(it => it.on && rowDiff(it) !== 0n);
-      const tips = [];
-      if (offItems.length) tips.push(`<li>Vypnuté riadky: ${offItems.length} ks za <b>${money(offSum)}</b>${offSum === chk.diff ? " – <b>presne o toľko je rozdiel</b>, súčet je teda v poriadku, ak tieto riadky do skladu nepatria." : "."}</li>`);
+    if (state === "explained") {
+      diag = `<div class="diag good"><div>${validLine}</div>
+        <div class="diag-sum"><span>Tovar v TXT <b>${money(chk.sum)}</b></span>${d.inv.orphans.length ? `<span>${d.inv.orphans.every(o => kind(o) === "Doprava") ? "Doprava" : "Bez EAN"} <b>${money(orphSum)}</b></span>` : ""}${offItems.length ? `<span>Vypnuté <b>${money(offSum)}</b></span>` : ""}<span>Spolu na faktúre <b>${money(chk.doc)} ${cur}</b></span></div>
+        <div>Rozdiel oproti faktúre tvorí len to, čo do skladu nejde:</div><ul>${orphRows.concat(offRow).join("")}</ul></div>`;
+    } else if (state === "bad") {
+      const tips = orphRows.concat(offRow);
       if (rounding.length) tips.push(`<li>${rounding.length} riadkov má na faktúre inú sumu ako počet × cena (zaokrúhlenie ceny). Sú v tabuľke označené žlto, spolu ${money(rounding.reduce((s, it) => s + rowDiff(it), 0n))}.</li>`);
-      d.inv.orphans.forEach((o, k) => tips.push(`<li>Riadok bez platného EAN (str. ${o.page}): ${money(FP.amount(o))} – <span class="src">${esc(o.line)}</span>${o.badEan ? " <b>(EAN má chybnú kontrolnú číslicu)</b>" : ""} <button class="btn mini" type="button" data-orphan="${k}">Pridať do TXT</button></li>`));
-      if (!tips.length) tips.push(`<li>Nenašiel som riadok, ktorý by chýbal. Suma na faktúre môže obsahovať DPH, dopravu bez EAN alebo zľavu na celý doklad.</li>`);
+      if (!tips.length) tips.push(`<li>Nenašiel som riadok, ktorý by chýbal. Suma na faktúre môže obsahovať DPH alebo zľavu na celý doklad.</li>`);
       diag = `<div class="diag"><div class="diag-sum"><span>Na faktúre <b>${money(chk.doc)}</b></span><span>V TXT <b>${money(chk.sum)}</b></span><span>Rozdiel <b>${money(chk.diff)} ${cur}</b></span></div>
         <div style="font-weight:600">Kde môže byť rozdiel:</div><ul>${tips.join("")}</ul></div>`;
+    } else if (state === "ok" && items.length) {
+      diag = `<div class="diag good"><div>${validLine} Súčet ${money(chk.sum)} ${cur} sa zhoduje s faktúrou.</div></div>`;
     }
     const rows = d.inv.items.map((it, n) => `
       <tr class="${it.on ? "" : "off"} ${rowDiff(it) !== 0n ? "rd" : ""}" data-n="${n}">
