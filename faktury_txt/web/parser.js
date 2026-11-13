@@ -38,6 +38,8 @@ const FP = (() => {
 
   function numbersIn(text) {
     text = text.replace(NOISE_RE, " ");
+    // „2pc.“, „10pair“, „3ks“ – množstvo zlepené s jednotkou
+    text = text.replace(/(\d)([A-Za-zÀ-ž]{1,5}\.?)(?=\s|$)/g, "$1 $2");
     const out = [];
     for (const m of text.matchAll(NUM_RE)) {
       const tok = m[1];

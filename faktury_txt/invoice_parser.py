@@ -69,6 +69,8 @@ def to_decimal(token: str) -> Decimal | None:
 
 def numbers_in(text: str) -> list[Decimal]:
     text = NOISE_RE.sub(" ", text)
+    # „2pc.“, „10pair“, „3ks“ – množstvo zlepené s jednotkou
+    text = re.sub(r"(\d)([A-Za-zÀ-ž]{1,5}\.?)(?=\s|$)", r"\1 \2", text)
     out = []
     for m in NUM_RE.finditer(text):
         tok = m.group(1)
@@ -131,7 +133,7 @@ class Invoice:
         """True ak sa súčet položiek zhoduje s niektorou sumou „Total/Spolu“ na faktúre."""
         if not self.doc_totals:
             return None
-        return any(abs(self.total - t) <= Decimal("0.02") for t in self.doc_totals)
+        return any(abs(self.total - t) <= Decimal("0.05") for t in self.doc_totals)
 
     @property
     def total(self) -> Decimal:
