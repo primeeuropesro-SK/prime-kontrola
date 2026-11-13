@@ -53,3 +53,9 @@ python invoice_parser.py faktura1.pdf faktura2.pdf -o C:\Users\dell\Desktop\Snim
 
 - PDF musí obsahovať text (faktúry z účtovných programov ho obsahujú). Naskenovaný papier treba najprv dať cez OCR.
 - Položky bez EAN sa nenačítajú, program na ne upozorní len ak má EAN, ale chýba množstvo alebo cena.
+
+## Online verzia
+
+`web/faktury-prijemka.html` – rovnaký prevod ako webová stránka (publikovaná ako claude.ai artefakt).
+PDF sa číta priamo v prehliadači cez pdf.js, faktúra sa nikam neodosiela. `web/parser.js` je
+JavaScriptová verzia `invoice_parser.py` (rovnaký algoritmus, overené na rovnakých faktúrach).
