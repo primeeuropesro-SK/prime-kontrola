@@ -52,7 +52,7 @@ h2 { font: 600 19px/1.25 var(--display); margin: 0; overflow-wrap: anywhere }
 label.f { display: grid; gap: 3px; font-size: 12px; color: var(--muted); font-weight: 500 }
 input[type=text], select { font: 14px var(--mono); color: var(--ink); background: var(--bg); border: 1px solid var(--line);
   border-radius: 5px; padding: 6px 8px; min-width: 0 }
-.fname { width: min(260px, 70vw) }
+.fname { width: min(380px, 78vw) }
 .spacer { flex: 1 }
 .warn { margin: 0; padding: 10px 16px; background: var(--warn-soft); font-size: 13px; border-bottom: 1px solid var(--line) }
 .tbl { overflow-x: auto }
@@ -76,6 +76,13 @@ pre.txt .ruler { color: var(--muted) }
 .status { font-size: 13px; color: var(--muted) } .status.err { color: var(--bad) } .status.okm { color: var(--ok) }
 .howto { color: var(--muted); font-size: 13.5px; display: grid; gap: 4px; margin: 0; padding-left: 20px }
 .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center }
+tr.rd td { background: var(--warn-soft) }
+.rdn { font-size: 11px; color: var(--muted) }
+.btn.mini { padding: 2px 8px; font-size: 12px }
+.diag { padding: 12px 16px; background: var(--bad-soft); border-bottom: 1px solid var(--line); font-size: 13.5px; display: grid; gap: 6px; min-width: 0 }
+.diag-sum { display: flex; flex-wrap: wrap; gap: 6px 22px; font-size: 15px; font-variant-numeric: tabular-nums }
+.diag ul { margin: 0; padding-left: 18px; display: grid; gap: 4px }
+.diag .src { color: var(--muted); font: 12px var(--mono); overflow-wrap: anywhere }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important } }
 </style>
 <div class="wrap">
@@ -172,12 +179,12 @@ const FP = (() => {
         if (nums.slice(j + 1).some(v => abs(prod - v) <= tol)) {
           const isInt = q % SCALE === 0n;
           const score = [isInt ? 1 : 0, -i, -j];
-          if (!best || cmp(score, best.score) > 0) best = { score, q, p };
+          if (!best || cmp(score, best.score) > 0) best = { score, q, p, v: nums.slice(j + 1).find(v => abs(prod - v) <= tol) };
         }
       }
       if (best && best.score[0]) break;
     }
-    return best ? [best.q, best.p] : null;
+    return best ? [best.q, best.p, best.v] : null;
   }
   const cmp = (a, b) => { for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) return a[k] - b[k]; return 0; };
 
@@ -202,12 +209,19 @@ const FP = (() => {
     return m ? m[1] : "";
   }
 
+  function detectDate(text) {
+    const m = /(?:date of issue|invoice date|issue date|data wystawienia|d[áa]tum vystavenia|datum vystaven[íi]|rechnungsdatum|data)[^\n\d]{0,60}(\d{4}-\d{2}-\d{2}|\d{1,2}[./]\d{1,2}[./]\d{4})/i.exec(text)
+      || /(\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}\.\d{4})/.exec(text);
+    return m ? m[1] : "";
+  }
+
   // pages: pole textov (riadky oddelené \n)
   function parsePages(pages) {
     const full = pages.join("\n");
-    const inv = { currency: detectCurrency(full), number: detectNumber(full), totals: detectTotals(full), items: [], warnings: [] };
+    const inv = { currency: detectCurrency(full), number: detectNumber(full), date: detectDate(full), totals: detectTotals(full), items: [], warnings: [], orphans: [] };
     pages.forEach((text, pi) => {
       const lines = text.split("\n");
+      const used = new Set();
       lines.forEach((line, idx) => {
         for (const m of line.matchAll(EAN_RE)) {
           const ean = m[1];
@@ -221,12 +235,27 @@ const FP = (() => {
               if (k < 0 || k >= lines.length) continue;
               if ([...lines[k].matchAll(EAN_RE)].some(x => eanValid(x[1]))) continue;
               found = findQtyPrice(numbersIn(lines[k].replace(POSITION_RE, " ")));
-              if (found) break;
+              if (found) { used.add(k); break; }
             }
           }
-          if (found) inv.items.push({ ean, qty: found[0], price: found[1], line: line.trim().replace(/\s{2,}/g, "  "), page: pi + 1, on: true });
+          if (found) used.add(idx);
+          if (found) inv.items.push({ ean, qty: found[0], price: found[1], value: found[2], line: line.trim().replace(/\s{2,}/g, "  "), page: pi + 1, on: true });
           else inv.warnings.push(`Str. ${pi + 1}: EAN ${ean} – nenašiel som množstvo a cenu.`);
         }
+      });
+      // Riadky, ktoré vyzerajú ako položka (počet × cena = hodnota), ale nemajú platný EAN
+      lines.forEach((line, idx) => {
+        if (used.has(idx) || TOTAL_WORDS.test(line)) return;
+        if ([...line.matchAll(EAN_RE)].some(x => eanValid(x[1]))) return;
+        const f = findQtyPrice(numbersIn(line.replace(POSITION_RE, " ")));
+        if (!f || f[2] === undefined) return;
+        let codes = [...line.matchAll(/(?<!\d)\d{8,14}(?!\d)/g)].map(x => x[0]);
+        if (!codes.some(c => c.length === 13))
+          for (const off of [1, -1, 2, -2]) {
+            const near = [...(lines[idx + off] || "").matchAll(EAN_RE)].map(x => x[1]).filter(c => !eanValid(c));
+            if (near.length) { codes = codes.concat(near); break; }
+          }
+        inv.orphans.push({ qty: f[0], price: f[1], value: f[2], code: codes.find(c => c.length >= 12) || "", badEan: codes.some(c => c.length === 13), line: line.trim().replace(/\s{2,}/g, "  "), page: pi + 1 });
       });
     });
     if (!inv.items.length) inv.warnings.push(full.trim() ? "Na faktúre sa nenašiel žiadny platný EAN." : "PDF neobsahuje text (asi sken) – treba ho najprv dať cez OCR.");
@@ -235,7 +264,17 @@ const FP = (() => {
 
   const amount = it => round2((it.qty * it.price) / SCALE);
   const total = items => items.reduce((s, it) => s + amount(it), 0n);
-  const totalOk = (inv, items) => (inv.totals.length ? inv.totals.some(t => abs(total(items) - t) <= 20000n) : null);
+  const TOLERANCE = 50000n; // 0,05 – rozdiel zo zaokrúhľovania
+  // Suma na faktúre najbližšia k súčtu položiek a rozdiel
+  function totalCheck(inv, items) {
+    const sum = total(items);
+    if (!inv.totals.length) return { ok: null, sum };
+    let best = inv.totals[0];
+    for (const t of inv.totals) if (abs(sum - t) < abs(sum - best)) best = t;
+    const diff = best - sum;
+    return { ok: abs(diff) <= TOLERANCE, sum, doc: best, diff };
+  }
+  const totalOk = (inv, items) => totalCheck(inv, items).ok;
 
   // pevná dĺžka: EAN 1/14, počet 15/15, cena 30/15, mena 45/3, CRLF
   function formatLine(it, cur) {
@@ -270,7 +309,7 @@ const FP = (() => {
     }).join("\n");
   }
 
-  return { parsePages, linesFromItems, toTxt, formatLine, amount, total, totalOk, fmt, toFixed, eanValid, CURRENCIES };
+  return { totalCheck, TOLERANCE, parsePages, linesFromItems, toTxt, formatLine, amount, total, totalOk, fmt, toFixed, eanValid, CURRENCIES };
 })();
 if (typeof module !== "undefined") module.exports = FP;
 </script>
@@ -325,9 +364,9 @@ if (typeof module !== "undefined") module.exports = FP;
       try {
         const inv = FP.parsePages(await readPdf(f));
         inv.items.forEach(it => { it.on = !skip.has(it.ean); });
-        const base = f.name.replace(/\.pdf$/i, "");
+        const base = f.name.replace(/\.pdf$/i, "") + "_" + stamp();
         removeExample();
-        docs.unshift({ id: nextId++, name: f.name, inv, fname: base, msg: "" });
+        docs.unshift({ id: nextId++, name: f.name, inv, fname: base, msg: "", loaded: new Date().toLocaleString("sk-SK") });
       } catch (e) {
         docs.unshift({ id: nextId++, name: f.name, inv: { items: [], totals: [], warnings: ["PDF sa nedá prečítať: " + (e.message || e)], currency: "EUR", number: "" }, fname: f.name, msg: "" });
       }
@@ -335,6 +374,13 @@ if (typeof module !== "undefined") module.exports = FP;
     setStatus(`Spracované: ${pdfs.length} ${pdfs.length === 1 ? "faktúra" : pdfs.length < 5 ? "faktúry" : "faktúr"}.`, "okm");
     renderAll();
   }
+
+  function stamp() {
+    const d = new Date(), z = n => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}_${z(d.getHours())}-${z(d.getMinutes())}`;
+  }
+  const r2 = v => ((v + (v >= 0n ? 5000n : -5000n)) / 10000n) * 10000n;
+  const rowDiff = it => (it.value === undefined ? 0n : r2(it.value) - FP.amount(it));
 
   function removeExample() { const i = docs.findIndex(d => d.example); if (i >= 0) docs.splice(i, 1); }
 
@@ -355,18 +401,30 @@ if (typeof module !== "undefined") module.exports = FP;
   }
 
   function render(d) {
-    const items = activeItems(d), ok = FP.totalOk(d.inv, items);
-    const chip = ok === true ? `<span class="chip ok">Súčet sedí s faktúrou</span>`
-      : ok === false ? `<span class="chip bad">Súčet nesedí s faktúrou</span>` : `<span class="chip none">Súčet na faktúre nenájdený</span>`;
+    const items = activeItems(d), chk = FP.totalCheck(d.inv, items), ok = chk.ok;
+    const cur = esc(d.inv.currency);
+    const chip = ok === true ? `<span class="chip ok">Súčet sedí s faktúrou${chk.diff ? ` (rozdiel ${money(chk.diff)} – zaokrúhlenie)` : ""}</span>`
+      : ok === false ? `<span class="chip bad">Rozdiel ${money(chk.diff)} ${cur}</span>` : `<span class="chip none">Súčet na faktúre nenájdený</span>`;
     const warn = [...d.inv.warnings];
-    if (ok === false) warn.unshift(`Súčet položiek ${money(FP.total(items))} sa nezhoduje so sumou na faktúre (${d.inv.totals.slice(0, 4).map(money).join("; ")}). Skontrolujte riadky alebo zapnite vypnuté riadky.`);
+    let diag = "";
+    if (ok === false) {
+      const offItems = d.inv.items.filter(it => !it.on), offSum = FP.total(offItems);
+      const rounding = d.inv.items.filter(it => it.on && rowDiff(it) !== 0n);
+      const tips = [];
+      if (offItems.length) tips.push(`<li>Vypnuté riadky: ${offItems.length} ks za <b>${money(offSum)}</b>${offSum === chk.diff ? " – <b>presne o toľko je rozdiel</b>, súčet je teda v poriadku, ak tieto riadky do skladu nepatria." : "."}</li>`);
+      if (rounding.length) tips.push(`<li>${rounding.length} riadkov má na faktúre inú sumu ako počet × cena (zaokrúhlenie ceny). Sú v tabuľke označené žlto, spolu ${money(rounding.reduce((s, it) => s + rowDiff(it), 0n))}.</li>`);
+      d.inv.orphans.forEach((o, k) => tips.push(`<li>Riadok bez platného EAN (str. ${o.page}): ${money(FP.amount(o))} – <span class="src">${esc(o.line)}</span>${o.badEan ? " <b>(EAN má chybnú kontrolnú číslicu)</b>" : ""} <button class="btn mini" type="button" data-orphan="${k}">Pridať do TXT</button></li>`));
+      if (!tips.length) tips.push(`<li>Nenašiel som riadok, ktorý by chýbal. Suma na faktúre môže obsahovať DPH, dopravu bez EAN alebo zľavu na celý doklad.</li>`);
+      diag = `<div class="diag"><div class="diag-sum"><span>Na faktúre <b>${money(chk.doc)}</b></span><span>V TXT <b>${money(chk.sum)}</b></span><span>Rozdiel <b>${money(chk.diff)} ${cur}</b></span></div>
+        <div style="font-weight:600">Kde môže byť rozdiel:</div><ul>${tips.join("")}</ul></div>`;
+    }
     const rows = d.inv.items.map((it, n) => `
-      <tr class="${it.on ? "" : "off"}" data-n="${n}">
+      <tr class="${it.on ? "" : "off"} ${rowDiff(it) !== 0n ? "rd" : ""}" data-n="${n}">
         <td><input type="checkbox" id="on-${d.id}-${n}" ${it.on ? "checked" : ""} aria-label="Zahrnúť riadok"></td>
         <td class="ean"><input type="text" id="ean-${d.id}-${n}" data-k="ean" value="${esc(it.ean)}" inputmode="numeric"></td>
         <td class="num qty"><input type="text" id="qty-${d.id}-${n}" data-k="qty" value="${short(it.qty)}" inputmode="decimal"></td>
         <td class="num price"><input type="text" id="price-${d.id}-${n}" data-k="price" value="${short(it.price)}" inputmode="decimal"></td>
-        <td class="num">${money(FP.amount(it))}</td>
+        <td class="num">${money(FP.amount(it))}${rowDiff(it) !== 0n ? `<div class="rdn">na faktúre ${money(r2(it.value))}</div>` : ""}</td>
         <td><button class="btn" type="button" data-skip="${n}" style="padding:2px 8px;font-size:12px" title="Tento EAN pri ďalších faktúrach automaticky odškrtnúť">vždy vynechať</button></td>
         <td class="src" title="${esc(it.line)}">${esc(it.line)}</td>
       </tr>`).join("");
@@ -375,7 +433,7 @@ if (typeof module !== "undefined") module.exports = FP;
     <section class="card${d.example ? " example" : ""}" data-id="${d.id}">
       <div class="card-head">
         <div class="title"><h2>${esc(d.name)}</h2>
-          <div class="meta">${d.example ? "Ukážka s vymyslenými údajmi. Zmizne po nahratí prvej faktúry." : `${d.inv.number ? "Doklad " + esc(d.inv.number) + " · " : ""}${d.inv.items.length} riadkov s EAN`}</div></div>
+          <div class="meta">${d.example ? "Ukážka s vymyslenými údajmi. Zmizne po nahratí prvej faktúry." : `${d.inv.number ? "Doklad " + esc(d.inv.number) + " · " : ""}${d.inv.date ? "Dátum faktúry " + esc(d.inv.date) + " · " : ""}${d.inv.items.length} riadkov s EAN · načítané ${esc(d.loaded || "")}`}</div></div>
         ${chip}
         ${d.example ? "" : `<button class="btn" type="button" data-remove title="Odstrániť zo zoznamu">Odstrániť</button>`}
       </div>
@@ -388,6 +446,7 @@ if (typeof module !== "undefined") module.exports = FP;
         <button class="btn" type="button" data-copy>Kopírovať obsah TXT</button>
         <button class="btn primary" type="button" data-dl ${canDl ? "" : "hidden"}>Stiahnuť ${esc(d.fname)}.txt</button>
       </div>
+      ${diag}
       ${warn.length ? `<p class="warn">${warn.map(esc).join("<br>")}</p>` : ""}
       <div class="tbl"><table>
         <thead><tr><th>✓</th><th>EAN</th><th class="num">Počet MJ</th><th class="num">Cena MJ</th><th class="num">Spolu</th><th></th><th>Riadok z faktúry</th></tr></thead>
@@ -434,6 +493,11 @@ if (typeof module !== "undefined") module.exports = FP;
   list.addEventListener("click", async e => {
     const b = e.target.closest("button"); if (!b) return;
     const d = docOf(b); if (!d) return;
+    if (b.dataset.orphan !== undefined) {
+      const o = d.inv.orphans.splice(+b.dataset.orphan, 1)[0];
+      d.inv.items.push({ ean: o.code.length <= 14 ? o.code : "", qty: o.qty, price: o.price, value: o.value, line: o.line, page: o.page, on: true });
+      return renderAll();
+    }
     if (b.hasAttribute("data-remove")) { docs.splice(docs.indexOf(d), 1); return renderAll(); }
     if (b.dataset.skip !== undefined) {
       const ean = d.inv.items[+b.dataset.skip].ean;

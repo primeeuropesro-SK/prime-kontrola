@@ -48,9 +48,9 @@
       try {
         const inv = FP.parsePages(await readPdf(f));
         inv.items.forEach(it => { it.on = !skip.has(it.ean); });
-        const base = f.name.replace(/\.pdf$/i, "");
+        const base = f.name.replace(/\.pdf$/i, "") + "_" + stamp();
         removeExample();
-        docs.unshift({ id: nextId++, name: f.name, inv, fname: base, msg: "" });
+        docs.unshift({ id: nextId++, name: f.name, inv, fname: base, msg: "", loaded: new Date().toLocaleString("sk-SK") });
       } catch (e) {
         docs.unshift({ id: nextId++, name: f.name, inv: { items: [], totals: [], warnings: ["PDF sa nedá prečítať: " + (e.message || e)], currency: "EUR", number: "" }, fname: f.name, msg: "" });
       }
@@ -58,6 +58,13 @@
     setStatus(`Spracované: ${pdfs.length} ${pdfs.length === 1 ? "faktúra" : pdfs.length < 5 ? "faktúry" : "faktúr"}.`, "okm");
     renderAll();
   }
+
+  function stamp() {
+    const d = new Date(), z = n => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}_${z(d.getHours())}-${z(d.getMinutes())}`;
+  }
+  const r2 = v => ((v + (v >= 0n ? 5000n : -5000n)) / 10000n) * 10000n;
+  const rowDiff = it => (it.value === undefined ? 0n : r2(it.value) - FP.amount(it));
 
   function removeExample() { const i = docs.findIndex(d => d.example); if (i >= 0) docs.splice(i, 1); }
 
@@ -78,18 +85,30 @@
   }
 
   function render(d) {
-    const items = activeItems(d), ok = FP.totalOk(d.inv, items);
-    const chip = ok === true ? `<span class="chip ok">Súčet sedí s faktúrou</span>`
-      : ok === false ? `<span class="chip bad">Súčet nesedí s faktúrou</span>` : `<span class="chip none">Súčet na faktúre nenájdený</span>`;
+    const items = activeItems(d), chk = FP.totalCheck(d.inv, items), ok = chk.ok;
+    const cur = esc(d.inv.currency);
+    const chip = ok === true ? `<span class="chip ok">Súčet sedí s faktúrou${chk.diff ? ` (rozdiel ${money(chk.diff)} – zaokrúhlenie)` : ""}</span>`
+      : ok === false ? `<span class="chip bad">Rozdiel ${money(chk.diff)} ${cur}</span>` : `<span class="chip none">Súčet na faktúre nenájdený</span>`;
     const warn = [...d.inv.warnings];
-    if (ok === false) warn.unshift(`Súčet položiek ${money(FP.total(items))} sa nezhoduje so sumou na faktúre (${d.inv.totals.slice(0, 4).map(money).join("; ")}). Skontrolujte riadky alebo zapnite vypnuté riadky.`);
+    let diag = "";
+    if (ok === false) {
+      const offItems = d.inv.items.filter(it => !it.on), offSum = FP.total(offItems);
+      const rounding = d.inv.items.filter(it => it.on && rowDiff(it) !== 0n);
+      const tips = [];
+      if (offItems.length) tips.push(`<li>Vypnuté riadky: ${offItems.length} ks za <b>${money(offSum)}</b>${offSum === chk.diff ? " – <b>presne o toľko je rozdiel</b>, súčet je teda v poriadku, ak tieto riadky do skladu nepatria." : "."}</li>`);
+      if (rounding.length) tips.push(`<li>${rounding.length} riadkov má na faktúre inú sumu ako počet × cena (zaokrúhlenie ceny). Sú v tabuľke označené žlto, spolu ${money(rounding.reduce((s, it) => s + rowDiff(it), 0n))}.</li>`);
+      d.inv.orphans.forEach((o, k) => tips.push(`<li>Riadok bez platného EAN (str. ${o.page}): ${money(FP.amount(o))} – <span class="src">${esc(o.line)}</span>${o.badEan ? " <b>(EAN má chybnú kontrolnú číslicu)</b>" : ""} <button class="btn mini" type="button" data-orphan="${k}">Pridať do TXT</button></li>`));
+      if (!tips.length) tips.push(`<li>Nenašiel som riadok, ktorý by chýbal. Suma na faktúre môže obsahovať DPH, dopravu bez EAN alebo zľavu na celý doklad.</li>`);
+      diag = `<div class="diag"><div class="diag-sum"><span>Na faktúre <b>${money(chk.doc)}</b></span><span>V TXT <b>${money(chk.sum)}</b></span><span>Rozdiel <b>${money(chk.diff)} ${cur}</b></span></div>
+        <div style="font-weight:600">Kde môže byť rozdiel:</div><ul>${tips.join("")}</ul></div>`;
+    }
     const rows = d.inv.items.map((it, n) => `
-      <tr class="${it.on ? "" : "off"}" data-n="${n}">
+      <tr class="${it.on ? "" : "off"} ${rowDiff(it) !== 0n ? "rd" : ""}" data-n="${n}">
         <td><input type="checkbox" id="on-${d.id}-${n}" ${it.on ? "checked" : ""} aria-label="Zahrnúť riadok"></td>
         <td class="ean"><input type="text" id="ean-${d.id}-${n}" data-k="ean" value="${esc(it.ean)}" inputmode="numeric"></td>
         <td class="num qty"><input type="text" id="qty-${d.id}-${n}" data-k="qty" value="${short(it.qty)}" inputmode="decimal"></td>
         <td class="num price"><input type="text" id="price-${d.id}-${n}" data-k="price" value="${short(it.price)}" inputmode="decimal"></td>
-        <td class="num">${money(FP.amount(it))}</td>
+        <td class="num">${money(FP.amount(it))}${rowDiff(it) !== 0n ? `<div class="rdn">na faktúre ${money(r2(it.value))}</div>` : ""}</td>
         <td><button class="btn" type="button" data-skip="${n}" style="padding:2px 8px;font-size:12px" title="Tento EAN pri ďalších faktúrach automaticky odškrtnúť">vždy vynechať</button></td>
         <td class="src" title="${esc(it.line)}">${esc(it.line)}</td>
       </tr>`).join("");
@@ -98,7 +117,7 @@
     <section class="card${d.example ? " example" : ""}" data-id="${d.id}">
       <div class="card-head">
         <div class="title"><h2>${esc(d.name)}</h2>
-          <div class="meta">${d.example ? "Ukážka s vymyslenými údajmi. Zmizne po nahratí prvej faktúry." : `${d.inv.number ? "Doklad " + esc(d.inv.number) + " · " : ""}${d.inv.items.length} riadkov s EAN`}</div></div>
+          <div class="meta">${d.example ? "Ukážka s vymyslenými údajmi. Zmizne po nahratí prvej faktúry." : `${d.inv.number ? "Doklad " + esc(d.inv.number) + " · " : ""}${d.inv.date ? "Dátum faktúry " + esc(d.inv.date) + " · " : ""}${d.inv.items.length} riadkov s EAN · načítané ${esc(d.loaded || "")}`}</div></div>
         ${chip}
         ${d.example ? "" : `<button class="btn" type="button" data-remove title="Odstrániť zo zoznamu">Odstrániť</button>`}
       </div>
@@ -111,6 +130,7 @@
         <button class="btn" type="button" data-copy>Kopírovať obsah TXT</button>
         <button class="btn primary" type="button" data-dl ${canDl ? "" : "hidden"}>Stiahnuť ${esc(d.fname)}.txt</button>
       </div>
+      ${diag}
       ${warn.length ? `<p class="warn">${warn.map(esc).join("<br>")}</p>` : ""}
       <div class="tbl"><table>
         <thead><tr><th>✓</th><th>EAN</th><th class="num">Počet MJ</th><th class="num">Cena MJ</th><th class="num">Spolu</th><th></th><th>Riadok z faktúry</th></tr></thead>
@@ -157,6 +177,11 @@
   list.addEventListener("click", async e => {
     const b = e.target.closest("button"); if (!b) return;
     const d = docOf(b); if (!d) return;
+    if (b.dataset.orphan !== undefined) {
+      const o = d.inv.orphans.splice(+b.dataset.orphan, 1)[0];
+      d.inv.items.push({ ean: o.code.length <= 14 ? o.code : "", qty: o.qty, price: o.price, value: o.value, line: o.line, page: o.page, on: true });
+      return renderAll();
+    }
     if (b.hasAttribute("data-remove")) { docs.splice(docs.indexOf(d), 1); return renderAll(); }
     if (b.dataset.skip !== undefined) {
       const ean = d.inv.items[+b.dataset.skip].ean;

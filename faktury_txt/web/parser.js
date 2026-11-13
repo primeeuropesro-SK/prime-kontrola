@@ -61,12 +61,12 @@ const FP = (() => {
         if (nums.slice(j + 1).some(v => abs(prod - v) <= tol)) {
           const isInt = q % SCALE === 0n;
           const score = [isInt ? 1 : 0, -i, -j];
-          if (!best || cmp(score, best.score) > 0) best = { score, q, p };
+          if (!best || cmp(score, best.score) > 0) best = { score, q, p, v: nums.slice(j + 1).find(v => abs(prod - v) <= tol) };
         }
       }
       if (best && best.score[0]) break;
     }
-    return best ? [best.q, best.p] : null;
+    return best ? [best.q, best.p, best.v] : null;
   }
   const cmp = (a, b) => { for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) return a[k] - b[k]; return 0; };
 
@@ -91,12 +91,19 @@ const FP = (() => {
     return m ? m[1] : "";
   }
 
+  function detectDate(text) {
+    const m = /(?:date of issue|invoice date|issue date|data wystawienia|d[áa]tum vystavenia|datum vystaven[íi]|rechnungsdatum|data)[^\n\d]{0,60}(\d{4}-\d{2}-\d{2}|\d{1,2}[./]\d{1,2}[./]\d{4})/i.exec(text)
+      || /(\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}\.\d{4})/.exec(text);
+    return m ? m[1] : "";
+  }
+
   // pages: pole textov (riadky oddelené \n)
   function parsePages(pages) {
     const full = pages.join("\n");
-    const inv = { currency: detectCurrency(full), number: detectNumber(full), totals: detectTotals(full), items: [], warnings: [] };
+    const inv = { currency: detectCurrency(full), number: detectNumber(full), date: detectDate(full), totals: detectTotals(full), items: [], warnings: [], orphans: [] };
     pages.forEach((text, pi) => {
       const lines = text.split("\n");
+      const used = new Set();
       lines.forEach((line, idx) => {
         for (const m of line.matchAll(EAN_RE)) {
           const ean = m[1];
@@ -110,12 +117,27 @@ const FP = (() => {
               if (k < 0 || k >= lines.length) continue;
               if ([...lines[k].matchAll(EAN_RE)].some(x => eanValid(x[1]))) continue;
               found = findQtyPrice(numbersIn(lines[k].replace(POSITION_RE, " ")));
-              if (found) break;
+              if (found) { used.add(k); break; }
             }
           }
-          if (found) inv.items.push({ ean, qty: found[0], price: found[1], line: line.trim().replace(/\s{2,}/g, "  "), page: pi + 1, on: true });
+          if (found) used.add(idx);
+          if (found) inv.items.push({ ean, qty: found[0], price: found[1], value: found[2], line: line.trim().replace(/\s{2,}/g, "  "), page: pi + 1, on: true });
           else inv.warnings.push(`Str. ${pi + 1}: EAN ${ean} – nenašiel som množstvo a cenu.`);
         }
+      });
+      // Riadky, ktoré vyzerajú ako položka (počet × cena = hodnota), ale nemajú platný EAN
+      lines.forEach((line, idx) => {
+        if (used.has(idx) || TOTAL_WORDS.test(line)) return;
+        if ([...line.matchAll(EAN_RE)].some(x => eanValid(x[1]))) return;
+        const f = findQtyPrice(numbersIn(line.replace(POSITION_RE, " ")));
+        if (!f || f[2] === undefined) return;
+        let codes = [...line.matchAll(/(?<!\d)\d{8,14}(?!\d)/g)].map(x => x[0]);
+        if (!codes.some(c => c.length === 13))
+          for (const off of [1, -1, 2, -2]) {
+            const near = [...(lines[idx + off] || "").matchAll(EAN_RE)].map(x => x[1]).filter(c => !eanValid(c));
+            if (near.length) { codes = codes.concat(near); break; }
+          }
+        inv.orphans.push({ qty: f[0], price: f[1], value: f[2], code: codes.find(c => c.length >= 12) || "", badEan: codes.some(c => c.length === 13), line: line.trim().replace(/\s{2,}/g, "  "), page: pi + 1 });
       });
     });
     if (!inv.items.length) inv.warnings.push(full.trim() ? "Na faktúre sa nenašiel žiadny platný EAN." : "PDF neobsahuje text (asi sken) – treba ho najprv dať cez OCR.");
@@ -124,7 +146,17 @@ const FP = (() => {
 
   const amount = it => round2((it.qty * it.price) / SCALE);
   const total = items => items.reduce((s, it) => s + amount(it), 0n);
-  const totalOk = (inv, items) => (inv.totals.length ? inv.totals.some(t => abs(total(items) - t) <= 20000n) : null);
+  const TOLERANCE = 50000n; // 0,05 – rozdiel zo zaokrúhľovania
+  // Suma na faktúre najbližšia k súčtu položiek a rozdiel
+  function totalCheck(inv, items) {
+    const sum = total(items);
+    if (!inv.totals.length) return { ok: null, sum };
+    let best = inv.totals[0];
+    for (const t of inv.totals) if (abs(sum - t) < abs(sum - best)) best = t;
+    const diff = best - sum;
+    return { ok: abs(diff) <= TOLERANCE, sum, doc: best, diff };
+  }
+  const totalOk = (inv, items) => totalCheck(inv, items).ok;
 
   // pevná dĺžka: EAN 1/14, počet 15/15, cena 30/15, mena 45/3, CRLF
   function formatLine(it, cur) {
@@ -159,6 +191,6 @@ const FP = (() => {
     }).join("\n");
   }
 
-  return { parsePages, linesFromItems, toTxt, formatLine, amount, total, totalOk, fmt, toFixed, eanValid, CURRENCIES };
+  return { totalCheck, TOLERANCE, parsePages, linesFromItems, toTxt, formatLine, amount, total, totalOk, fmt, toFixed, eanValid, CURRENCIES };
 })();
 if (typeof module !== "undefined") module.exports = FP;
