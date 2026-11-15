@@ -178,7 +178,30 @@ def detect_totals(text: str) -> list[Decimal]:
     return vals
 
 
+def join_broken_eans(lines: list[str]) -> list[str]:
+    """EAN zalomený v bunke tabuľky do 2 riadkov: „59023652256“ + „90“ -> 5902365225690."""
+    lines = list(lines)
+    for i, line in enumerate(lines):
+        heads = list(re.finditer(r"(?<!\d)(\d{6,12})(?!\d)", line))
+        if not heads:
+            continue
+        h = heads[-1]
+        done = False
+        for j in range(i + 1, min(i + 3, len(lines))):
+            for t in reversed(list(re.finditer(r"(?<![\d,.])(\d{1,7})(?![\d,.])", lines[j]))):
+                code = h.group(1) + t.group(1)
+                if len(code) == 13 and ean_valid(code):
+                    lines[i] = line[:h.start()] + code + line[h.end():]
+                    lines[j] = lines[j][:t.start()] + " " * len(t.group(1)) + lines[j][t.end():]
+                    done = True
+                    break
+            if done:
+                break
+    return lines
+
+
 def parse_pages(pages: list[str], source: str = "", currency: str | None = None) -> Invoice:
+    pages = ["\n".join(join_broken_eans(t.splitlines())) for t in pages]
     full = "\n".join(pages)
     inv = Invoice(source=source, currency=currency or detect_currency(full),
                   number=detect_number(full), doc_totals=detect_totals(full))

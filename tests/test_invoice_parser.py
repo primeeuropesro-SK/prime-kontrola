@@ -47,6 +47,13 @@ class ParserTest(unittest.TestCase):
             ("5902973659580", Decimal("2"), Decimal("14.9862"))])
         self.assertTrue(inv.total_ok)
 
+    def test_ean_broken_over_two_lines(self):
+        text = (" 1  KOMPLET TERMOAKTYWNY LQ002   4 szt   10,39   41,56   0%   59023652256\n"
+                "                                                                90\n")
+        inv = ip.parse_pages([text])
+        self.assertEqual([(i.ean, i.qty, i.price) for i in inv.items],
+                         [("5902365225690", Decimal("4"), Decimal("10.39"))])
+
     def test_discount_price_used(self):
         inv = ip.parse_pages([DISCOUNT])
         self.assertEqual((inv.items[0].qty, inv.items[0].price), (Decimal("2"), Decimal("18.00")))

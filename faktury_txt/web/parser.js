@@ -99,8 +99,32 @@ const FP = (() => {
     return m ? m[1] : "";
   }
 
+  // EAN zalomený v bunke tabuľky do 2 riadkov: „59023652256“ + „90“ -> 5902365225690
+  function joinBrokenEans(lines) {
+    lines = lines.slice();
+    for (let i = 0; i < lines.length; i++) {
+      const heads = [...lines[i].matchAll(/(?<!\d)(\d{6,12})(?!\d)/g)];
+      if (!heads.length) continue;
+      const h = heads[heads.length - 1];
+      let done = false;
+      for (let j = i + 1; j <= i + 2 && j < lines.length && !done; j++) {
+        const tails = [...lines[j].matchAll(/(?<![\d,.])(\d{1,7})(?![\d,.])/g)].reverse();
+        for (const t of tails) {
+          const code = h[1] + t[1];
+          if (code.length === 13 && eanValid(code)) {
+            lines[i] = lines[i].slice(0, h.index) + code + lines[i].slice(h.index + h[1].length);
+            lines[j] = lines[j].slice(0, t.index) + " ".repeat(t[1].length) + lines[j].slice(t.index + t[1].length);
+            done = true; break;
+          }
+        }
+      }
+    }
+    return lines;
+  }
+
   // pages: pole textov (riadky oddelené \n)
   function parsePages(pages) {
+    pages = pages.map(t => joinBrokenEans(t.split("\n")).join("\n"));
     const full = pages.join("\n");
     const inv = { currency: detectCurrency(full), number: detectNumber(full), date: detectDate(full), totals: detectTotals(full), items: [], warnings: [], orphans: [] };
     pages.forEach((text, pi) => {
@@ -130,6 +154,7 @@ const FP = (() => {
       // Riadky, ktoré vyzerajú ako položka (počet × cena = hodnota), ale nemajú platný EAN
       lines.forEach((line, idx) => {
         if (used.has(idx) || TOTAL_WORDS.test(line)) return;
+        if ((line.match(/\d[.,]\d{2}(?!\d)/g) || []).length < 2) return; // položka má cenu a sumu s desatinami
         if ([...line.matchAll(EAN_RE)].some(x => eanValid(x[1]))) return;
         const f = findQtyPrice(numbersIn(line.replace(POSITION_RE, " ")));
         if (!f || f[2] === undefined) return;
